@@ -1,0 +1,17 @@
+# Example rotation config for offline coaching PoC (synthetic demo spec).
+# Not affiliated with any official World of Warcraft specialization.
+
+spec_id: demo_caster
+gcd_seconds: 1.5
+
+priority:
+  - id: defensive_potion_like
+    when: player_health_pct < 0.30
+  - id: interrupt
+    when: target_cast_interruptible
+  - id: spender
+    when: resource_pct >= 0.90
+  - id: maint_dot
+    when: target_missing_dot
+  - id: builder
+    when: true

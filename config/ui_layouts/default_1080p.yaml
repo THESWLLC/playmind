@@ -1,0 +1,12 @@
+# Default 1080p UI ROI placeholders for offline vision experiments.
+# Coordinates are illustrative; calibrate per recording.
+
+resolution: [1920, 1080]
+ui_scale: 1.0
+
+rois:
+  player_health: [80, 980, 300, 40]
+  player_resource: [80, 1020, 300, 28]
+  target_health: [760, 40, 400, 36]
+  cast_bar: [760, 900, 400, 32]
+  action_bar_primary: [640, 1040, 640, 40]
