@@ -1,0 +1,10 @@
+__pycache__/
+*.py[cod]
+.pytest_cache/
+data/
+*.mp4
+*.mov
+.DS_Store
+.venv/
+venv/
+models/checkpoints/
