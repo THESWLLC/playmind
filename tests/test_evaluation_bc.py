@@ -32,6 +32,7 @@ from playmind.models.policy_v2 import (
     SkillPolicyV2,
     structured_feature_vector,
 )
+from playmind.models.recurrent_policy import DEFAULT_AUX_KEYS, RecurrentSkillPolicyV2
 from playmind.observations import Observation
 from playmind.policies.scripted import ScriptedPolicy
 from playmind.replay_env import ReplayEnv, compare_policies
@@ -323,7 +324,9 @@ def test_train_with_torch_if_available(tmp_path: Path) -> None:
     assert result["trained"] is True
     assert ckpt.exists()
     assert metrics.exists()
-    loaded = SkillPolicyV2.load(ckpt)
-    skill, conf, aux = loaded.predict(observation={"vision_player_hp": 0.9, "has_target": False})
+    loaded = RecurrentSkillPolicyV2.load(ckpt)
+    skill, conf, aux = loaded.predict(
+        observation={"vision_player_hp": 0.9, "has_target": False}
+    )
     assert skill in loaded.skill_names
-    assert set(aux) == set(AUX_KEYS)
+    assert set(aux) == set(DEFAULT_AUX_KEYS)
