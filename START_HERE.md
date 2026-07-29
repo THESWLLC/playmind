@@ -31,7 +31,7 @@ Python 3.10+ and both `ffmpeg` and `ffprobe` are required for real video import.
 winget install Gyan.FFmpeg
 git clone https://github.com/THESWLLC/playmind.git
 cd playmind
-git switch cursor/offline-studio-milestone-3737
+git pull origin main
 .\setup_playmind_studio.ps1
 ffmpeg -version
 ffprobe -version
@@ -54,7 +54,7 @@ generic dependency command cannot choose that build safely.
 sudo apt update && sudo apt install -y ffmpeg python3-venv
 git clone https://github.com/THESWLLC/playmind.git
 cd playmind
-git switch cursor/offline-studio-milestone-3737
+git pull origin main
 python3 -m venv .venv
 source .venv/bin/activate
 python -m pip install --upgrade pip

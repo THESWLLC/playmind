@@ -1,7 +1,7 @@
 # Offline Studio — Implementation Audit
 
 **Date:** 2026-07-29  
-**Branch:** `cursor/offline-studio-milestone-3737`  
+**Status:** Merged to `main` (PR #11)  
 **Baseline:** `main` @ PR #10 (170 tests)
 **Current verification:** 190 tests passed; Studio startup dry-run passed with
 FFmpeg/ffprobe available on the verification host.
