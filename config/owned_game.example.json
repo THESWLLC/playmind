@@ -19,5 +19,15 @@
     "break_minutes_min": 10,
     "break_minutes_max": 40,
     "max_wall_hours": 14
+  },
+  "learning_v2": {
+    "enabled": true,
+    "policy_mode": "hybrid",
+    "legacy_q_fallback": false,
+    "history_length": 16,
+    "confidence_threshold": 0.45,
+    "bc_checkpoint": null,
+    "use_rewards_v2": true,
+    "track_episodes": true
   }
 }
