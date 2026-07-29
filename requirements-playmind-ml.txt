@@ -1,0 +1,6 @@
+# Optional local training stack (large downloads; not installed by setup_windows.ps1).
+torch
+transformers
+datasets
+peft
+accelerate

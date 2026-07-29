@@ -16,6 +16,9 @@ Optional: F9 toggles demo recording when ``pynput`` is installed.
 from __future__ import annotations
 
 import json
+import mimetypes
+import subprocess
+import sys
 import threading
 import time
 import webbrowser
@@ -28,8 +31,23 @@ from typing import Any
 from urllib.parse import parse_qs, urlparse
 
 from playmind.demonstrations import DemonstrationRecorder
+from playmind.gui.owned_dashboard import (
+    DEFAULT_PLANNER_V2,
+    INDEX_HTML as DASHBOARD_HTML,
+    PLANNER_MODES,
+    get_registry,
+    latest_eval_report,
+    learning_proof,
+    replay_summary,
+    rich_status,
+    start_smoke_training,
+    stop_training,
+)
+from playmind.human_input.capture import PhysicalInputCapture
 from playmind.learning_v2_controller import LearningV2Config
 from playmind.owned_loop import OwnedGameLoop, OwnedLoopConfig
+from playmind.planner_v2.modes import PlannerMode
+from playmind.segmentation import RuleBasedSkillSegmenter
 
 
 DEFAULT_LEARNING_V2: dict[str, Any] = {
@@ -46,7 +64,7 @@ DEFAULT_LEARNING_V2: dict[str, Any] = {
 POLICY_MODES = ("scripted", "hybrid", "legacy_q", "behavior_clone")
 
 
-INDEX_HTML = """<!doctype html>
+_LEGACY_INDEX_HTML = """<!doctype html>
 <html lang="en">
 <head>
   <meta charset="utf-8" />
@@ -177,7 +195,7 @@ INDEX_HTML = """<!doctype html>
         <label>tick delay <input id="tickSec" type="number" value="0.05" min="0" step="0.05" style="width:4.5rem" /></label>
         <label>vlm every <input id="visionEvery" type="number" value="24" min="1" style="width:3.5rem" title="Call vision LLM every N ticks — higher = much faster ticks" /></label>
         <label>directive <input id="directive" value="farm to level 2" style="width:14rem" title="e.g. farm to level 2 | kill grell | go north | quest" /></label>
-        <label><input id="live" type="checkbox" checked /> live keys</label>
+        <label><input id="live" type="checkbox" /> live keys</label>
         <label><input id="ollama" type="checkbox" checked /> LLM</label>
       </div>
 
@@ -462,6 +480,8 @@ poll();
 </html>
 """
 
+INDEX_HTML = DASHBOARD_HTML
+
 
 @dataclass
 class GuiState:
@@ -478,6 +498,18 @@ class GuiState:
     loop: Any = None  # OwnedGameLoop while running, if accessible
     data_dir: Path = field(default_factory=lambda: Path("data/playmind/owned"))
     hotkey_note: str = "F9 start/stop demo (pynput optional)"
+    mode: str = "shadow"
+    planner_v2: dict[str, Any] = field(default_factory=lambda: dict(DEFAULT_PLANNER_V2))
+    planner_runtime: Any = None
+    registry: Any = None
+    physical_capture: PhysicalInputCapture | None = None
+    physical_input_count: int = 0
+    segmented_skills: list[dict[str, Any]] = field(default_factory=list)
+    segmenter: RuleBasedSkillSegmenter = field(default_factory=RuleBasedSkillSegmenter)
+    emergency_stop: bool = False
+    soft_estop: bool = False
+    training_process: Any = None
+    training_log: Any = None
 
     def push(self, typ: str, **payload: Any) -> None:
         with self.lock:
@@ -519,6 +551,17 @@ def _maybe_append_demo(status: dict[str, Any]) -> None:
     try:
         frame = status.get("frame")
         notes = STATE.demo_meta.get("notes")
+        physical_events: list[dict[str, Any]] = []
+        if STATE.physical_capture is not None:
+            physical_events = STATE.physical_capture.snapshot_and_clear()
+            STATE.physical_input_count += len(physical_events)
+        segments = STATE.segmenter.segment(
+            {"physical_events": physical_events, "observation": status}
+        )
+        segment_rows = [segment.to_dict() for segment in segments]
+        if segment_rows:
+            STATE.segmented_skills.extend(segment_rows)
+        inferred_skill = segment_rows[0]["skill"] if segment_rows else status.get("active_skill")
         rec.append(
             frame_path=frame,
             observation={
@@ -541,7 +584,17 @@ def _maybe_append_demo(status: dict[str, Any]) -> None:
                 )
                 if k in status or status.get(k) is not None
             },
-            key_events=[{"action": status.get("action"), "tick": status.get("tick")}],
+            key_events=[
+                {
+                    "action": status.get("action"),
+                    "tick": status.get("tick"),
+                    "source": "playmind_generated",
+                }
+            ],
+            physical_events=physical_events,
+            input_source="human" if physical_events else "playmind_generated",
+            inferred_skill=inferred_skill,
+            segmentation_meta={"segments": segment_rows},
             goal=STATE.demo_meta.get("goal") or status.get("goal"),
             profile=STATE.demo_meta.get("profile"),
             notes=notes,
@@ -590,6 +643,7 @@ def _run_owned(opts: dict[str, Any]) -> None:
     STATE.running = True
     STATE.stop_flag = False
     STATE.loop = None
+    STATE.soft_estop = False
     STATE.push("info", message="Owned loop starting…")
     try:
         max_ticks_raw = opts.get("max_ticks", 0)
@@ -609,7 +663,7 @@ def _run_owned(opts: dict[str, Any]) -> None:
 
         cfg = OwnedLoopConfig(
             config_path=Path(opts.get("config") or "config/owned_game.json"),
-            dry_run=not bool(opts.get("live", True)),
+            dry_run=not bool(opts.get("live", False)),
             use_ollama=bool(opts.get("ollama", True)),
             ollama_model=str(opts.get("ollama_model") or "llama3.2"),
             vision_model=str(opts.get("vision_model") or "qwen2.5vl:7b"),
@@ -626,9 +680,15 @@ def _run_owned(opts: dict[str, Any]) -> None:
             replay_n=int(opts.get("replay_n") if opts.get("replay_n") is not None else 4),
             data_dir=data_dir,
             learning_v2=v2_cfg,
+            mode=STATE.mode,
+            planner_v2=dict(STATE.planner_v2),
         )
 
         def on_status(status: dict[str, Any]) -> None:
+            STATE.planner_runtime = getattr(loop, "_planner_v2", None)
+            STATE.soft_estop = bool(status.get("soft_estop", False))
+            if STATE.planner_runtime is not None:
+                STATE.emergency_stop = bool(STATE.planner_runtime.emergency_stop)
             STATE.last_status = dict(status)
             STATE.push("status", status=status)
             _maybe_append_demo(status)
@@ -791,8 +851,16 @@ def _demo_start(opts: dict[str, Any]) -> dict[str, Any]:
         goal=opts.get("goal"),
         profile=opts.get("profile"),
     )
+    STATE.physical_input_count = 0
+    STATE.segmented_skills = []
+    STATE.physical_capture = PhysicalInputCapture(source="human", unfocused_policy="label")
+    capture_available = STATE.physical_capture.start()
     STATE.push("info", message=f"Demo recording started: {sid}")
-    return {"ok": True, **STATE.demo_snapshot()}
+    return {
+        "ok": True,
+        "physical_capture_available": capture_available,
+        **STATE.demo_snapshot(),
+    }
 
 
 def _demo_stop(opts: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -803,8 +871,16 @@ def _demo_stop(opts: dict[str, Any] | None = None) -> dict[str, Any]:
         if opts.get("notes") is not None:
             STATE.demo_meta["notes"] = opts.get("notes")
     path = rec.stop()
+    if STATE.physical_capture is not None:
+        STATE.physical_capture.stop()
     STATE.push("info", message=f"Demo recording stopped: {path}")
-    return {"ok": True, "session_dir": str(path), **STATE.demo_snapshot()}
+    return {
+        "ok": True,
+        "session_dir": str(path),
+        "physical_input_count": STATE.physical_input_count,
+        "segmented_skills": list(STATE.segmented_skills),
+        **STATE.demo_snapshot(),
+    }
 
 
 def _demo_mark(opts: dict[str, Any]) -> dict[str, Any]:
@@ -879,6 +955,19 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def _file(self, path: Path) -> None:
+        try:
+            body = path.read_bytes()
+        except OSError:
+            self._json(404, {"error": "file_not_found"})
+            return
+        self.send_response(200)
+        self.send_header("Content-Type", mimetypes.guess_type(path.name)[0] or "application/octet-stream")
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Cache-Control", "no-store")
+        self.end_headers()
+        self.wfile.write(body)
+
     def _read_json(self) -> dict[str, Any]:
         length = int(self.headers.get("Content-Length") or 0)
         raw = self.rfile.read(length) if length else b"{}"
@@ -907,6 +996,39 @@ class Handler(BaseHTTPRequestHandler):
                 },
             )
             return
+        if parsed.path == "/api/status":
+            self._json(200, rich_status(STATE))
+            return
+        if parsed.path == "/api/registry/models":
+            try:
+                self._json(200, {"models": get_registry(STATE).list_models()})
+            except Exception as exc:  # noqa: BLE001
+                self._json(500, {"error": str(exc)})
+            return
+        if parsed.path == "/api/learning_proof":
+            self._json(200, learning_proof(STATE))
+            return
+        if parsed.path == "/api/eval/latest":
+            self._json(200, latest_eval_report())
+            return
+        if parsed.path == "/api/replay":
+            self._json(200, replay_summary(STATE))
+            return
+        if parsed.path == "/api/doctor":
+            try:
+                from scripts.doctor import doctor_report
+
+                self._json(200, doctor_report())
+            except Exception as exc:  # noqa: BLE001
+                self._json(500, {"ok": False, "error": str(exc)})
+            return
+        if parsed.path == "/api/frame/latest":
+            frame = STATE.last_status.get("frame")
+            if not frame:
+                self._json(404, {"error": "no_frame"})
+            else:
+                self._file(Path(frame))
+            return
         if parsed.path == "/api/v2/config":
             self._json(200, {"learning_v2": STATE.learning_v2, "hotkey": STATE.hotkey_note})
             return
@@ -920,6 +1042,9 @@ class Handler(BaseHTTPRequestHandler):
             if STATE.running:
                 self._json(409, {"error": "already_running"})
                 return
+            if STATE.emergency_stop:
+                self._json(409, {"error": "emergency_stop_active", "hint": "clear emergency stop first"})
+                return
             t = threading.Thread(target=_run_owned, args=(opts,), daemon=True)
             STATE.thread = t
             t.start()
@@ -928,6 +1053,41 @@ class Handler(BaseHTTPRequestHandler):
         if parsed.path == "/api/stop":
             STATE.stop_flag = True
             self._json(200, {"ok": True, "stopping": True})
+            return
+        if parsed.path == "/api/mode":
+            mode = str(opts.get("mode") or "").lower()
+            if mode not in PLANNER_MODES:
+                self._json(400, {"error": f"mode must be one of {PLANNER_MODES}"})
+                return
+            STATE.mode = mode
+            STATE.planner_v2["mode"] = mode
+            runtime = STATE.planner_runtime
+            if runtime is not None:
+                runtime.mode = PlannerMode.parse(mode)
+            self._json(200, {"ok": True, "mode": mode})
+            return
+        if parsed.path in {"/api/planner/approve", "/api/planner/reject"}:
+            runtime = STATE.planner_runtime
+            if runtime is None:
+                self._json(409, {"error": "planner_not_running"})
+                return
+            approved = parsed.path.endswith("/approve")
+            runtime.approve_plan(approved)
+            if not approved:
+                runtime.executor.clear()
+            self._json(200, {"ok": True, "approved": approved, "planner": runtime.snapshot()})
+            return
+        if parsed.path == "/api/emergency_stop":
+            active = bool(opts.get("active", True))
+            STATE.emergency_stop = active
+            STATE.stop_flag = active
+            runtime = STATE.planner_runtime
+            if runtime is not None:
+                runtime.set_emergency_stop(active)
+                if active:
+                    runtime.executor.clear()
+            STATE.push("error" if active else "info", message=f"Emergency stop {'activated' if active else 'cleared'}")
+            self._json(200, {"ok": True, "emergency_stop": active})
             return
         if parsed.path == "/api/v2/config":
             try:
@@ -945,6 +1105,52 @@ class Handler(BaseHTTPRequestHandler):
             return
         if parsed.path == "/api/demo/mark":
             self._json(200, _demo_mark(opts))
+            return
+        if parsed.path == "/api/training/start":
+            self._json(200, start_smoke_training(STATE, opts))
+            return
+        if parsed.path == "/api/training/stop":
+            self._json(200, stop_training(STATE))
+            return
+        if parsed.path.startswith("/api/registry/"):
+            action = parsed.path.rsplit("/", 1)[-1]
+            model_id = str(opts.get("model_id") or "")
+            reason = str(opts.get("reason") or "GUI operator action")
+            try:
+                registry = get_registry(STATE)
+                if action == "promote":
+                    result = registry.promote(
+                        model_id,
+                        reason=reason,
+                        manual_override=bool(opts.get("manual_override", False)),
+                    )
+                elif action == "reject":
+                    result = registry.reject(model_id, reason=reason)
+                elif action == "archive":
+                    result = registry.set_status(model_id, "archived", reason=reason)
+                elif action == "rollback":
+                    result = registry.rollback(model_id or None, reason=reason)
+                elif action == "export_ollama":
+                    model = registry.get(model_id)
+                    if model is None:
+                        raise KeyError(f"unknown model_id: {model_id!r}")
+                    command = [
+                        sys.executable,
+                        str(Path("scripts/build_ollama_modelfile.py")),
+                        "--base-model",
+                        str(model.get("base_model") or "llama3.2"),
+                        "--name",
+                        model_id,
+                    ]
+                    process = subprocess.Popen(command)  # noqa: S603 - fixed repository script
+                    result = {"model_id": model_id, "pid": process.pid, "command": command}
+                else:
+                    self._json(404, {"error": "not_found"})
+                    return
+            except (KeyError, ValueError, OSError) as exc:
+                self._json(400, {"error": str(exc)})
+                return
+            self._json(200, {"ok": True, "model": result})
             return
         if parsed.path == "/api/episode/reset":
             self._json(200, _reset_episode())

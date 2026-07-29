@@ -1,7 +1,7 @@
 """Human demonstration recording for Learning Architecture V2 behavior cloning.
 
 Stores session metadata as JSONL under ``data/playmind/demonstrations/<session>/``
-with optional frame file references. Schema version 1; writes are atomic-ish
+with optional frame file references. Schema version 2; writes are atomic-ish
 (temp file + ``os.replace`` for session status; flushed appends for samples).
 """
 
@@ -17,9 +17,10 @@ from typing import Any, Literal, Mapping, Optional, Sequence
 
 from playmind.observations import Observation
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 Outcome = Literal["success", "failure", "bad"]
+InputSource = Literal["human", "playmind_generated", "unknown"]
 DEFAULT_ROOT = Path("data/playmind/demonstrations")
 
 
@@ -53,7 +54,7 @@ def _atomic_write_json(path: Path, payload: Mapping[str, Any]) -> None:
 
 @dataclass
 class DemonstrationSample:
-    """One recorded demonstration timestep (schema_version=1)."""
+    """One recorded demonstration timestep."""
 
     sample_id: str
     session_id: str
@@ -62,6 +63,15 @@ class DemonstrationSample:
     frame_path: Optional[str] = None
     observation: dict[str, Any] = field(default_factory=dict)
     key_events: list[Any] = field(default_factory=list)
+    physical_events: list[Any] = field(default_factory=list)
+    input_source: InputSource = "unknown"
+    lifecycle_state: Any = None
+    sensor_confidence: dict[str, Any] = field(default_factory=dict)
+    inferred_skill: Optional[str] = None
+    segmentation_meta: dict[str, Any] = field(default_factory=dict)
+    training_eligible: bool = True
+    is_human_demonstration: bool = False
+    human_training_eligible: bool = False
     goal: Any = None
     profile: Any = None
     notes: Optional[str] = None
@@ -80,6 +90,15 @@ class DemonstrationSample:
             "frame_path": self.frame_path,
             "observation": dict(self.observation),
             "key_events": list(self.key_events),
+            "physical_events": list(self.physical_events),
+            "input_source": self.input_source,
+            "lifecycle_state": self.lifecycle_state,
+            "sensor_confidence": dict(self.sensor_confidence),
+            "inferred_skill": self.inferred_skill,
+            "segmentation_meta": dict(self.segmentation_meta),
+            "training_eligible": self.training_eligible,
+            "is_human_demonstration": self.is_human_demonstration,
+            "human_training_eligible": self.human_training_eligible,
             "goal": self.goal,
             "profile": self.profile,
             "notes": self.notes,
@@ -99,9 +118,13 @@ class DemonstrationRecorder:
         root: str | Path | None = None,
         *,
         session_id: str | None = None,
+        input_source: InputSource = "unknown",
     ) -> None:
+        if input_source not in {"human", "playmind_generated", "unknown"}:
+            raise ValueError(f"unknown input_source: {input_source!r}")
         self.root = Path(root) if root is not None else DEFAULT_ROOT
         self.session_id: str | None = session_id
+        self.default_input_source: InputSource = input_source
         self.session_dir: Path | None = None
         self.recording: bool = False
         self.sample_count: int = 0
@@ -125,6 +148,7 @@ class DemonstrationRecorder:
         episode_id: str | None = None,
         goal: Any = None,
         profile: Any = None,
+        input_source: InputSource | None = None,
     ) -> str:
         """Begin a recording session. Returns the session id."""
         if self.recording:
@@ -140,6 +164,10 @@ class DemonstrationRecorder:
         self.episode_id = episode_id or str(uuid.uuid4())
         self.default_goal = goal
         self.default_profile = profile
+        if input_source is not None:
+            if input_source not in {"human", "playmind_generated", "unknown"}:
+                raise ValueError(f"unknown input_source: {input_source!r}")
+            self.default_input_source = input_source
         self.outcome = None
         self.outcome_notes = None
         self.started_at = time.time()
@@ -162,6 +190,14 @@ class DemonstrationRecorder:
         frame_path: str | Path | None = None,
         observation: dict[str, Any] | Observation | None = None,
         key_events: Sequence[Any] | None = None,
+        physical_events: Sequence[Any] | None = None,
+        input_source: InputSource | None = None,
+        lifecycle_state: Any = None,
+        sensor_confidence: Mapping[str, Any] | None = None,
+        sensor_confidence_blob: Mapping[str, Any] | None = None,
+        inferred_skill: str | None = None,
+        segmentation_meta: Mapping[str, Any] | None = None,
+        training_eligible: bool | None = None,
         goal: Any = None,
         profile: Any = None,
         notes: str | None = None,
@@ -179,6 +215,16 @@ class DemonstrationRecorder:
         ts = float(timestamp if timestamp is not None else time.time())
         ep = str(episode_id or self.episode_id or "unknown")
         self.episode_id = ep
+        source = input_source or self.default_input_source
+        if source not in {"human", "playmind_generated", "unknown"}:
+            raise ValueError(f"unknown input_source: {source!r}")
+        segmentation = dict(segmentation_meta or {})
+        segment_eligible = bool(segmentation.get("training_eligible", True))
+        requested_eligible = (
+            bool(training_eligible) if training_eligible is not None else segment_eligible
+        )
+        eligible = source != "playmind_generated" and requested_eligible
+        is_human = source == "human"
 
         rel_frame: Optional[str] = None
         if frame_path is not None:
@@ -200,6 +246,15 @@ class DemonstrationRecorder:
             frame_path=rel_frame,
             observation=obs_dict,
             key_events=list(key_events or []),
+            physical_events=list(physical_events or []),
+            input_source=source,
+            lifecycle_state=lifecycle_state,
+            sensor_confidence=dict(sensor_confidence or sensor_confidence_blob or {}),
+            inferred_skill=inferred_skill,
+            segmentation_meta=segmentation,
+            training_eligible=eligible,
+            is_human_demonstration=is_human,
+            human_training_eligible=is_human and eligible,
             goal=goal if goal is not None else self.default_goal,
             profile=profile if profile is not None else self.default_profile,
             notes=notes,
@@ -253,6 +308,7 @@ class DemonstrationRecorder:
             "episode_id": self.episode_id,
             "goal": self.default_goal,
             "profile": self.default_profile,
+            "input_source": self.default_input_source,
             "outcome": self.outcome,
             "outcome_notes": self.outcome_notes,
             "started_at": self.started_at,
@@ -304,7 +360,7 @@ class DemonstrationRecorder:
 
 
 def load_session_samples(session_dir: str | Path) -> list[dict[str, Any]]:
-    """Load all samples from a demonstration session directory."""
+    """Load samples, normalizing absent v2 fields on legacy v1 rows."""
     path = Path(session_dir) / "meta.jsonl"
     if not path.exists():
         return []
@@ -314,7 +370,27 @@ def load_session_samples(session_dir: str | Path) -> list[dict[str, Any]]:
             line = line.strip()
             if not line:
                 continue
-            rows.append(json.loads(line))
+            row = json.loads(line)
+            if not isinstance(row, Mapping):
+                continue
+            normalized = dict(row)
+            source = str(normalized.get("input_source") or "unknown")
+            if source not in {"human", "playmind_generated", "unknown"}:
+                source = "unknown"
+            normalized.setdefault("physical_events", [])
+            normalized["input_source"] = source
+            normalized.setdefault("lifecycle_state", None)
+            normalized.setdefault("sensor_confidence", {})
+            normalized.setdefault("inferred_skill", None)
+            normalized.setdefault("segmentation_meta", {})
+            default_eligible = source != "playmind_generated"
+            normalized.setdefault("training_eligible", default_eligible)
+            normalized.setdefault("is_human_demonstration", source == "human")
+            normalized.setdefault(
+                "human_training_eligible",
+                source == "human" and bool(normalized["training_eligible"]),
+            )
+            rows.append(normalized)
     return rows
 
 

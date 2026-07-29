@@ -1,0 +1,49 @@
+#!/usr/bin/env python3
+"""Export planner chosen/rejected records to preference JSONL."""
+
+from __future__ import annotations
+
+import argparse
+import json
+import sys
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from playmind.planner_data.export_preferences import export_preferences
+
+
+def _jsonl(path: Path) -> list[dict]:
+    rows: list[dict] = []
+    with path.open("r", encoding="utf-8") as handle:
+        for line in handle:
+            if line.strip():
+                value = json.loads(line)
+                if isinstance(value, dict):
+                    rows.append(value)
+    return rows
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--input", required=True, help="preference source JSONL")
+    parser.add_argument("--output-dir", default="data/playmind/planner/preferences")
+    parser.add_argument("--manifest-dir", default="data/playmind/planner/manifests")
+    parser.add_argument("--seed", type=int, default=0)
+    parser.add_argument("--include-ineligible", action="store_true")
+    args = parser.parse_args(argv)
+    manifest = export_preferences(
+        _jsonl(Path(args.input)),
+        args.output_dir,
+        manifest_dir=args.manifest_dir,
+        seed=args.seed,
+        include_ineligible=args.include_ineligible,
+    )
+    print(json.dumps(manifest, indent=2, sort_keys=True))
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

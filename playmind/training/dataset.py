@@ -57,7 +57,7 @@ def _session_metadata(session_dir: Path) -> dict[str, Any]:
 
 
 def _skill_label(row: Mapping[str, Any]) -> str | None:
-    skill = row.get("skill") or row.get("skill_label")
+    skill = row.get("skill") or row.get("inferred_skill") or row.get("skill_label")
     if skill:
         return str(skill)
     for event in row.get("key_events") or []:
@@ -300,6 +300,16 @@ class DemonstrationDataset:
                         "schema_version": target.get("schema_version", 1),
                         "goal": target.get("goal"),
                         "key_events": list(target.get("key_events") or []),
+                        "physical_events": list(target.get("physical_events") or []),
+                        "input_source": target.get("input_source", "unknown"),
+                        "lifecycle_state": target.get("lifecycle_state"),
+                        "sensor_confidence": dict(target.get("sensor_confidence") or {}),
+                        "inferred_skill": target.get("inferred_skill"),
+                        "segmentation_meta": dict(target.get("segmentation_meta") or {}),
+                        "training_eligible": bool(target.get("training_eligible", True)),
+                        "human_training_eligible": bool(
+                            target.get("human_training_eligible", False)
+                        ),
                     }
                 )
 

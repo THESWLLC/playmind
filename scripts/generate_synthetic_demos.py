@@ -182,7 +182,7 @@ def generate(
     t0 = time.time()
     for s_i in range(sessions):
         traj_name, skill_cycle = TRAJECTORIES[s_i % len(TRAJECTORIES)]
-        rec = DemonstrationRecorder(root=out_dir)
+        rec = DemonstrationRecorder(root=out_dir, input_source="playmind_generated")
         rec.start(
             goal=f"synthetic:{traj_name}",
             profile="synthetic_smoke",

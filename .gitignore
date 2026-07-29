@@ -9,6 +9,7 @@ data/
 venv/
 models/checkpoints/
 models/playmind-lora/
+models/playmind/
 config/owned_game.json
 .idea/
 .vscode/
