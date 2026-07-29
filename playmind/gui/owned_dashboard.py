@@ -13,6 +13,7 @@ from typing import Any
 
 from playmind.demonstrations import list_sessions, load_session_samples
 from playmind.planner_v2.model_registry import ModelRegistry
+from playmind.studio.eval_index import load_latest
 
 ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_PLANNER_V2: dict[str, Any] = {
@@ -54,15 +55,8 @@ def get_registry(state: Any) -> ModelRegistry:
 
 
 def latest_eval_report() -> dict[str, Any]:
-    candidates: list[Path] = []
-    for base in (
-        ROOT / "data/playmind/eval",
-        ROOT / "data/playmind/evaluation",
-        ROOT / "data/playmind/planner/eval",
-    ):
-        if base.exists():
-            candidates.extend(base.rglob("report.json"))
-    if not candidates:
+    latest = load_latest(ROOT / "data/playmind/planner/evaluation")
+    if latest is None:
         return {
             "available": False,
             "path": None,
@@ -70,17 +64,18 @@ def latest_eval_report() -> dict[str, Any]:
             "comparisons": {},
             "warning": "No evaluation report found.",
         }
-    path = max(candidates, key=lambda item: item.stat().st_mtime)
-    report = _read_json(path)
-    comparisons = report.get("comparisons")
-    if not isinstance(comparisons, Mapping):
-        comparisons = report.get("models")
+    report = latest.get("report")
+    if not isinstance(report, Mapping):
+        report = {}
+    comparisons = latest.get("comparisons")
     return {
         "available": bool(report),
-        "path": str(path),
-        "modified_at": path.stat().st_mtime,
-        "report": report,
+        "path": latest.get("path"),
+        "modified_at": latest.get("modified_at"),
+        "report": dict(report),
         "comparisons": dict(comparisons) if isinstance(comparisons, Mapping) else {},
+        "run_id": latest.get("run_id"),
+        "smoke": bool(latest.get("smoke")),
     }
 
 
@@ -133,6 +128,7 @@ def learning_proof(state: Any) -> dict[str, Any]:
     production = next((row for row in models if row.get("status") == "production"), None)
     candidates = [row for row in models if row.get("status") == "candidate"]
     candidate = candidates[0] if candidates else None
+    smoke_only = bool(candidate and candidate.get("smoke"))
     production_score = _score(production)
     candidate_score = _score(candidate)
     evidence_source = "registry"
@@ -170,7 +166,11 @@ def learning_proof(state: Any) -> dict[str, Any]:
             )
             if production_score is not None or candidate_score is not None:
                 evidence_source = "eval_report"
-    if production_score is None or candidate_score is None:
+    if smoke_only:
+        verdict = "INSUFFICIENT"
+        reason = "Candidate is SMOKE / NO REAL WEIGHTS TRAINED; it cannot prove learning."
+        candidate_score = None
+    elif production_score is None or candidate_score is None:
         verdict = "INSUFFICIENT"
         reason = "Both production and candidate need comparable evaluation scores."
     elif candidate_score > production_score:
@@ -188,6 +188,11 @@ def learning_proof(state: Any) -> dict[str, Any]:
         "candidate_score": candidate_score,
         "evidence_source": evidence_source,
         "evidence_only": True,
+        "candidate_smoke": smoke_only,
+        "live_use_prohibited": bool(
+            (candidate or {}).get("live_use_prohibited")
+            or (production or {}).get("live_use_prohibited")
+        ),
         "warning": "Offline scores do not prove live gameplay improvement.",
     }
 
@@ -480,7 +485,7 @@ button,input,select{color:var(--text);background:#172535;border:1px solid var(--
 button{cursor:pointer}button:hover,button.active{border-color:var(--a)}button.danger{border-color:var(--bad)}
 main{max-width:1400px;margin:auto;padding:16px}.tab{display:none}.tab.active{display:block}.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:12px}
 .card{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:14px;min-height:120px}.card h2{font-size:12px;color:var(--muted);text-transform:uppercase;letter-spacing:.08em;margin:0 0 10px}
-.row{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin:8px 0}.metric{font-size:22px;font-weight:650}.label{font-size:11px;color:var(--muted)}
+.row{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin:8px 0}.metric{font-size:22px;font-weight:650}.label{font-size:11px;color:var(--muted)}.smoke{border:2px solid var(--warn);padding:8px;color:var(--warn);font-weight:700}
 pre{white-space:pre-wrap;word-break:break-word;background:#080d13;border-radius:7px;padding:10px;max-height:550px;overflow:auto;font:12px Consolas,monospace}
 table{width:100%;border-collapse:collapse}td,th{text-align:left;border-bottom:1px solid var(--line);padding:8px}.bar{height:8px;background:#253345;border-radius:6px}.bar i{display:block;height:100%;background:var(--a)}
 @media(max-width:700px){nav{top:47px}main{padding:10px}}
@@ -513,7 +518,7 @@ const esc=x=>String(x??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&g
 const pretty=x=>JSON.stringify(x,null,2); async function post(url,body={}){const r=await fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});return r.json()}
 function cards(s){const vals=[['Mode',s.mode],['Focus',s.focus],['Authorization',s.auth.can_send_input?'input allowed':'input blocked'],['Active model',s.active_model],['Recording',s.recording],['Training',s.training.running],['E-stop',s.emergency_stop],['Is the model learning?',s.learning_proof.verdict]];document.querySelector('#dashboard').innerHTML=vals.map(([k,v])=>`<div class=card><h2>${esc(k)}</h2><div class=metric>${esc(v)}</div></div>`).join('')+`<div class=card><h2>Warnings</h2>${(s.warnings||[]).map(x=>`<div class=warn>${esc(x)}</div>`).join('')||'None'}</div>`}
 function table(rows){if(!rows.length)return '<p>No data available.</p>';const keys=[...new Set(rows.flatMap(x=>Object.keys(x)))].slice(0,8);return `<table><tr>${keys.map(k=>`<th>${esc(k)}</th>`).join('')}</tr>${rows.map(r=>`<tr>${keys.map(k=>`<td>${esc(typeof r[k]==='object'?JSON.stringify(r[k]):r[k])}</td>`).join('')}</tr>`).join('')}</table>`}
-async function refresh(){try{const s=await (await fetch('/api/status')).json();window.statusBlob=s;document.querySelector('#conn').textContent=s.running?'LIVE':'idle';document.querySelector('#safe').textContent=`${s.mode} / ${s.auth.can_send_input?'keyboard authorized':'keyboard blocked'}`;document.querySelector('#mode').value=s.mode;document.querySelector('#estop').textContent=s.emergency_stop?'Clear emergency stop':'Emergency stop';cards(s);for(const [id,key] of [['perception','perception'],['planner','planner'],['demonstrations','demonstration'],['dataset','dataset'],['training','training'],['proof','learning_proof'],['alerts','alerts'],['replay','replay']])document.querySelector('#'+id).textContent=pretty(s[key]);document.querySelector('#proofVerdict').textContent=s.learning_proof.verdict;document.querySelector('#comparison').innerHTML=table(Object.entries(s.eval.comparisons||{}).map(([model,v])=>({model,...v})));document.querySelector('#models').innerHTML=table(s.models||[])+(s.models||[]).filter(x=>x.model_id).map(x=>`<div class=row><b>${esc(x.model_id)}</b><button onclick="modelAction('promote','${esc(x.model_id)}')">Promote</button><button onclick="modelAction('reject','${esc(x.model_id)}')">Reject</button><button onclick="modelAction('archive','${esc(x.model_id)}')">Archive</button><button onclick="modelAction('rollback','${esc(x.model_id)}')">Rollback</button><button onclick="modelAction('export_ollama','${esc(x.model_id)}')">Export Ollama</button></div>`).join('');document.querySelector('#coverage').innerHTML=Object.entries(s.dataset.coverage||{}).map(([k,v])=>`<label>${esc(k)} ${v.percent}%</label><div class=bar><i style="width:${v.percent}%"></i></div>`).join('');const img=document.querySelector('#frame');if(s.perception.latest_frame_url){img.src=s.perception.latest_frame_url+'?t='+Date.now();img.style.display='block'}}catch(e){document.querySelector('#conn').textContent='offline'}}
+async function refresh(){try{const s=await (await fetch('/api/status')).json();window.statusBlob=s;document.querySelector('#conn').textContent=s.running?'LIVE':'idle';document.querySelector('#safe').textContent=`${s.mode} / ${s.auth.can_send_input?'keyboard authorized':'keyboard blocked'}`;document.querySelector('#mode').value=s.mode;document.querySelector('#estop').textContent=s.emergency_stop?'Clear emergency stop':'Emergency stop';cards(s);for(const [id,key] of [['perception','perception'],['planner','planner'],['demonstrations','demonstration'],['dataset','dataset'],['training','training'],['proof','learning_proof'],['alerts','alerts'],['replay','replay']])document.querySelector('#'+id).textContent=pretty(s[key]);document.querySelector('#proofVerdict').textContent=s.learning_proof.verdict;document.querySelector('#comparison').innerHTML=table(Object.entries(s.eval.comparisons||{}).map(([model,v])=>({model,...v})));document.querySelector('#models').innerHTML=table(s.models||[])+(s.models||[]).filter(x=>x.model_id).map(x=>`<div class="row ${x.smoke?'smoke':''}"><b>${esc(x.model_id)}</b>${x.smoke?'<span>SMOKE / NO REAL WEIGHTS TRAINED</span>':''}${x.live_use_prohibited?'<span>LIVE USE PROHIBITED</span>':''}<button onclick="modelAction('promote','${esc(x.model_id)}')" ${x.smoke||x.live_use_prohibited?'disabled':''}>Promote</button><button onclick="modelAction('reject','${esc(x.model_id)}')">Reject</button><button onclick="modelAction('archive','${esc(x.model_id)}')">Archive</button><button onclick="modelAction('rollback','${esc(x.model_id)}')">Rollback</button><button onclick="modelAction('export_ollama','${esc(x.model_id)}')">Export Ollama</button></div>`).join('');document.querySelector('#coverage').innerHTML=Object.entries(s.dataset.coverage||{}).map(([k,v])=>`<label>${esc(k)} ${v.percent}%</label><div class=bar><i style="width:${v.percent}%"></i></div>`).join('');const img=document.querySelector('#frame');if(s.perception.latest_frame_url){img.src=s.perception.latest_frame_url+'?t='+Date.now();img.style.display='block'}}catch(e){document.querySelector('#conn').textContent='offline'}}
 async function modelAction(action,id){if(!confirm(`${action} ${id}?`))return;await post('/api/registry/'+action,{model_id:id,reason:'GUI operator action'});refresh()}window.modelAction=modelAction;
 document.querySelector('#mode').onchange=e=>post('/api/mode',{mode:e.target.value}).then(refresh);
 document.querySelector('#btnStart').onclick=()=>post('/api/start',{directive:document.querySelector('#directive').value,live:document.querySelector('#live').checked}).then(refresh);

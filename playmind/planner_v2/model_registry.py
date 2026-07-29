@@ -42,6 +42,16 @@ def _loads(value: Any) -> dict[str, Any]:
     return dict(parsed) if isinstance(parsed, Mapping) else {}
 
 
+def _loads_list(value: Any) -> list[str]:
+    if not value:
+        return []
+    try:
+        parsed = json.loads(str(value))
+    except (json.JSONDecodeError, TypeError):
+        return []
+    return [str(item) for item in parsed] if isinstance(parsed, list) else []
+
+
 class ModelRegistry:
     def __init__(
         self,
@@ -83,6 +93,10 @@ class ModelRegistry:
                     reason TEXT,
                     created_at TEXT NOT NULL,
                     parent_id TEXT,
+                    live_use_prohibited INTEGER NOT NULL DEFAULT 0,
+                    source_game_profile TEXT,
+                    allowed_uses TEXT NOT NULL DEFAULT '[]',
+                    smoke INTEGER NOT NULL DEFAULT 0,
                     FOREIGN KEY(parent_id) REFERENCES models(model_id)
                 );
                 CREATE UNIQUE INDEX IF NOT EXISTS one_production_model
@@ -100,6 +114,29 @@ class ModelRegistry:
                 );
                 """
             )
+            columns = {
+                str(row["name"])
+                for row in connection.execute("PRAGMA table_info(models)").fetchall()
+            }
+            migrations = {
+                "live_use_prohibited": (
+                    "ALTER TABLE models ADD COLUMN "
+                    "live_use_prohibited INTEGER NOT NULL DEFAULT 0"
+                ),
+                "source_game_profile": (
+                    "ALTER TABLE models ADD COLUMN source_game_profile TEXT"
+                ),
+                "allowed_uses": (
+                    "ALTER TABLE models ADD COLUMN "
+                    "allowed_uses TEXT NOT NULL DEFAULT '[]'"
+                ),
+                "smoke": (
+                    "ALTER TABLE models ADD COLUMN smoke INTEGER NOT NULL DEFAULT 0"
+                ),
+            }
+            for name, statement in migrations.items():
+                if name not in columns:
+                    connection.execute(statement)
 
     @staticmethod
     def _row(row: sqlite3.Row | None) -> dict[str, Any] | None:
@@ -108,6 +145,9 @@ class ModelRegistry:
         result = dict(row)
         result["train_metrics"] = _loads(result.get("train_metrics"))
         result["eval_metrics"] = _loads(result.get("eval_metrics"))
+        result["live_use_prohibited"] = bool(result.get("live_use_prohibited", 0))
+        result["allowed_uses"] = _loads_list(result.get("allowed_uses"))
+        result["smoke"] = bool(result.get("smoke", 0))
         return result
 
     @staticmethod
@@ -167,6 +207,10 @@ class ModelRegistry:
         reason: str | None = None,
         created_at: str | None = None,
         parent_id: str | None = None,
+        live_use_prohibited: bool = False,
+        source_game_profile: str | None = None,
+        allowed_uses: list[str] | tuple[str, ...] | set[str] | None = None,
+        smoke: bool = False,
         **extra: Any,
     ) -> dict[str, Any]:
         if isinstance(model_id, Mapping):
@@ -185,12 +229,30 @@ class ModelRegistry:
             reason = data.pop("reason", reason)
             created_at = data.pop("created_at", created_at)
             parent_id = data.pop("parent_id", parent_id)
+            live_use_prohibited = bool(
+                data.pop("live_use_prohibited", live_use_prohibited)
+            )
+            source_game_profile = data.pop(
+                "source_game_profile", source_game_profile
+            )
+            allowed_uses = data.pop("allowed_uses", allowed_uses)
+            smoke = bool(data.pop("smoke", smoke))
             extra.update(data)
         else:
             identifier = str(model_id).strip()
         if not identifier:
             raise ValueError("model_id must be non-empty")
         state = self._validate_status(status)
+        normalized_uses = sorted(
+            {str(value).strip() for value in (allowed_uses or []) if str(value).strip()}
+        )
+        if live_use_prohibited and any(
+            value.casefold() in {"live", "live_gameplay", "generated_input"}
+            for value in normalized_uses
+        ):
+            raise ValueError("allowed_uses conflicts with live_use_prohibited")
+        if state == "production" and (live_use_prohibited or smoke):
+            raise ValueError("smoke or live-use-prohibited models cannot be production")
         if extra:
             raise TypeError(f"unknown model fields: {', '.join(sorted(extra))}")
         with self._lock, self._connect() as connection:
@@ -199,8 +261,9 @@ class ModelRegistry:
                 INSERT INTO models (
                     model_id, display_name, base_model, adapter_path, merged_path,
                     gguf_path, quantization, dataset_version, train_metrics,
-                    eval_metrics, status, reason, created_at, parent_id
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    eval_metrics, status, reason, created_at, parent_id,
+                    live_use_prohibited, source_game_profile, allowed_uses, smoke
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     identifier,
@@ -217,6 +280,10 @@ class ModelRegistry:
                     reason,
                     created_at or _now(),
                     parent_id,
+                    int(bool(live_use_prohibited)),
+                    source_game_profile,
+                    json.dumps(normalized_uses, separators=(",", ":")),
+                    int(bool(smoke)),
                 ),
             )
             self._audit(
@@ -362,6 +429,10 @@ class ModelRegistry:
         model = self._require(model_id)
         gates = self.promotion_gates
         errors: list[str] = []
+        if model.get("live_use_prohibited"):
+            errors.append("model is marked live_use_prohibited")
+        if model.get("smoke"):
+            errors.append("smoke artifacts contain no promotable real weights")
 
         valid_threshold = float(
             gates.get(
@@ -454,6 +525,13 @@ class ModelRegistry:
                 f"cannot promote model with status {candidate['status']!r}"
             )
         errors = self.promotion_errors(model_id, production=production)
+        hard_errors = [
+            error
+            for error in errors
+            if "live_use_prohibited" in error or "smoke artifacts" in error
+        ]
+        if hard_errors:
+            raise ValueError("promotion prohibited: " + "; ".join(hard_errors))
         if errors and not manual_override:
             raise ValueError("promotion gates failed: " + "; ".join(errors))
 
@@ -552,6 +630,30 @@ class ModelRegistry:
                 "SELECT * FROM models WHERE status = 'production' LIMIT 1"
             ).fetchone()
         return self._row(row)
+
+    def use_errors(self, model_id: str, use: str) -> list[str]:
+        model = self._require(model_id)
+        requested = str(use).strip()
+        errors: list[str] = []
+        if model.get("smoke"):
+            errors.append("smoke artifact is not a usable model")
+        if model.get("live_use_prohibited") and requested.casefold() in {
+            "live",
+            "live_gameplay",
+            "generated_input",
+            "physical_input",
+        }:
+            errors.append("model is prohibited from live/generated-input use")
+        allowed = set(str(value) for value in model.get("allowed_uses") or [])
+        if allowed and requested not in allowed:
+            errors.append(f"use {requested!r} is not in allowed_uses")
+        return errors
+
+    def assert_use_allowed(self, model_id: str, use: str) -> bool:
+        errors = self.use_errors(model_id, use)
+        if errors:
+            raise ValueError("; ".join(errors))
+        return True
 
     def audit_log(
         self,

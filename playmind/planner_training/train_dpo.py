@@ -382,6 +382,7 @@ def train_dpo(
             quantization=quantization,
             metrics=metrics,
             dataset_version=Path(dataset_path).name,
+            smoke=smoke,
         )
         if registered["status"] != "candidate":
             raise RuntimeError("DPO registration must never set production status")

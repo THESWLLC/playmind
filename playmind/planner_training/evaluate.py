@@ -25,6 +25,7 @@ from playmind.planner_v2.model_registry import DEFAULT_REGISTRY_PATH, ModelRegis
 from playmind.planner_v2.ollama_client import OllamaClient
 from playmind.policies.scripted import ScriptedPolicy
 from playmind.skills import list_skills
+from playmind.studio.eval_index import normalize_comparisons, write_index
 
 
 def load_scenarios(path: str | Path | None = None) -> list[dict[str, Any]]:
@@ -229,17 +230,23 @@ def _write_reports(
     json_path = output_dir / f"{stem}.json"
     csv_path = output_dir / f"{stem}.csv"
     markdown_path = output_dir / f"{stem}.md"
+    run_report_path = output_dir / "runs" / stem / "report.json"
     artifacts = {
         "json": str(json_path),
         "csv": str(csv_path),
         "markdown": str(markdown_path),
+        "report": str(run_report_path),
     }
     persisted_report = dict(report)
+    persisted_report["run_id"] = stem
+    persisted_report["comparisons"] = normalize_comparisons(persisted_report)
     persisted_report["artifacts"] = artifacts
-    json_path.write_text(
-        json.dumps(persisted_report, indent=2, sort_keys=True, default=str) + "\n",
-        encoding="utf-8",
+    serialized = (
+        json.dumps(persisted_report, indent=2, sort_keys=True, default=str) + "\n"
     )
+    json_path.write_text(serialized, encoding="utf-8")
+    run_report_path.parent.mkdir(parents=True, exist_ok=False)
+    run_report_path.write_text(serialized, encoding="utf-8")
     fieldnames = [
         "backend",
         "scenario_id",
@@ -311,6 +318,7 @@ def _write_reports(
                 + f"; `{json.dumps(gates['errors'])}`"
             )
     markdown_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    write_index(output_dir)
     return artifacts
 
 
@@ -362,6 +370,7 @@ def evaluate_backends(
                 "note": "Evaluation never promotes a model; promotion is explicit.",
             }
         report["backends"][name] = backend_report
+    report["comparisons"] = normalize_comparisons(report)
     report["artifacts"] = _write_reports(Path(output_dir), report, all_rows)
     return report
 

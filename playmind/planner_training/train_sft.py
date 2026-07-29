@@ -422,6 +422,7 @@ def _register_candidate(
     quantization: str,
     metrics: Mapping[str, Any],
     dataset_version: str,
+    smoke: bool = False,
 ) -> dict[str, Any]:
     registry = ModelRegistry(registry_path)
     return registry.register(
@@ -433,6 +434,8 @@ def _register_candidate(
         dataset_version=dataset_version,
         train_metrics=metrics,
         status="candidate",
+        smoke=smoke,
+        allowed_uses=["smoke_validation"] if smoke else [],
         reason="training completed; evaluation and explicit promotion required",
     )
 
@@ -522,6 +525,7 @@ def train_sft(
             quantization=quantization,
             metrics=metrics,
             dataset_version=dataset_version,
+            smoke=smoke,
         )
         if registered["status"] != "candidate":
             raise RuntimeError("training registration must never set production status")

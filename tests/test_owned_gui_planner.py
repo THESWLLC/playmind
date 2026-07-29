@@ -139,3 +139,38 @@ def test_registry_models_and_learning_proof_endpoints(tmp_path: Path) -> None:
     finally:
         server.shutdown()
         STATE.registry = None
+
+
+def test_latest_eval_discovers_canonical_backend_report(
+    tmp_path: Path, monkeypatch
+) -> None:
+    evaluation = tmp_path / "data/playmind/planner/evaluation"
+    evaluation.mkdir(parents=True)
+    report_path = evaluation / "planner_benchmark_20260729.json"
+    report_path.write_text(
+        json.dumps(
+            {
+                "created_at": "2026-07-29T12:00:00+00:00",
+                "scenario_count": 2,
+                "backends": {
+                    "production": {
+                        "metrics": {"benchmark_score": 0.5}
+                    },
+                    "candidate": {
+                        "metrics": {"benchmark_score": 0.7}
+                    },
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        "playmind.gui.owned_dashboard.ROOT",
+        tmp_path,
+    )
+    from playmind.gui.owned_dashboard import latest_eval_report
+
+    latest = latest_eval_report()
+    assert latest["available"] is True
+    assert latest["path"] == str(report_path)
+    assert set(latest["comparisons"]) == {"production", "candidate"}
