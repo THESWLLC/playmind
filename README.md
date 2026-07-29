@@ -2,17 +2,19 @@
 
 Local AI agent framework for **games you own** (or are allowed to automate).
 
-PlayMind can:
-- Play a built-in demo world
-- Learn from its own runs (tabular policy + experience logs)
-- Ask you questions in teach mode
-- Capture screens + OCR/vision ROIs
-- Drive an owned-game keyboard actuator (opt-in)
-- Schedule long sessions with breaks
-- Export / build local LLM planner artifacts (Ollama Modelfile, optional LoRA)
-
 > **Not for World of Warcraft or other ToS-restricted live clients.**  
 > Do not point this at official MMO clients with automated keyboard/mouse control.
+
+## Status
+
+**Learning Architecture V2 is implemented on `main`** (skills, hybrid/scripted/BC policies, demos, train/eval, sensor metrics, owned GUI V2, config validation, migration, diagnostics).
+
+| Layer | State |
+|-------|--------|
+| Framework / V2 learning stack | Done — see [docs/QUICKSTART_V2.md](docs/QUICKSTART_V2.md) |
+| Competent play on *your* game | Local work — calibrate window/ROIs/keymap, record demos, optionally train BC |
+
+Without a BC checkpoint, `policy_mode: hybrid` runs **scripted skills** (safe default).
 
 ## Quick start (no extra installs)
 
@@ -21,39 +23,71 @@ python3 playmind_onefile.py --episodes 5
 python3 -m playmind --episodes 5
 ```
 
-### GUI with live logging
+### GUIs
 
 ```bash
-PYTHONPATH=. python3 -m playmind.web_gui
+# Demo world + live log
+python3 -m playmind.web_gui
 # open http://127.0.0.1:8765
+
+# Owned-game brain monitor (Learning V2 controls)
+python3 -m playmind.owned_gui
+# open http://127.0.0.1:8777
 ```
 
-Shows the world map, current action/HP/kills, and a scrolling event log.
-
-## Full feature commands
+## Owned-game loop
 
 ```bash
-# Teach mode
-python3 -m playmind --teach --episodes 1
-
-# Demo vision frames
-python3 -m playmind --vision --episodes 3
-
-# Self-play + fine-tune export
-PYTHONPATH=. python3 scripts/self_play_train.py --episodes 50
-PYTHONPATH=. python3 scripts/finetune_export_check.py
-PYTHONPATH=. python3 scripts/build_ollama_modelfile.py
-
-# Screen capture / OCR (needs: pip install mss Pillow pytesseract)
-PYTHONPATH=. python3 scripts/capture_once.py --ocr
-
-# Owned-game loop (dry-run by default)
 cp config/owned_game.example.json config/owned_game.json
-# edit: i_own_this_game, capture, rois, keymap
-PYTHONPATH=. python3 scripts/run_owned_loop.py --config config/owned_game.json --max-ticks 10
+# edit: i_own_this_game, capture.window_title, rois, keymap
+python3 scripts/run_owned_loop.py --config config/owned_game.json --max-ticks 10
 ```
 
-Optional local LLM planner:
+Keyboard is **off** unless `i_own_this_game=true`, `enable_keyboard=true`, and you pass `--live`.
+
+## Learning V2
+
+```json
+"learning_v2": {
+  "enabled": true,
+  "policy_mode": "hybrid",
+  "bc_checkpoint": null
+}
+```
+
+```bash
+# Scripted / hybrid dry-run
+python3 scripts/run_owned_loop.py --config config/owned_game.json --max-ticks 30
+
+# Validate demos / train BC (needs demos; torch optional for real MLP train)
+python3 scripts/train_behavior_clone.py --dry-validate-only
+python3 scripts/train_behavior_clone.py --checkpoint models/checkpoints/skill_policy_v2.json
+
+# Eval + diagnostics
+python3 scripts/run_evaluation.py
+python3 scripts/export_diagnostics.py
+python3 scripts/migrate_legacy_learning.py --data-dir data/playmind/owned
+```
+
+Full flows: [docs/QUICKSTART_V2.md](docs/QUICKSTART_V2.md)
+
+### Local next steps (your PC)
+
+1. Set `capture.window_title` and ROIs for your game  
+2. Dry-run with `learning_v2.enabled=true` / `policy_mode=scripted`  
+3. Record demos in owned GUI → train BC → set `bc_checkpoint`  
+4. Only then enable `--live` keyboard  
+
+## Other features
+
+```bash
+python3 -m playmind --teach --episodes 1
+python3 -m playmind --vision --episodes 3
+python3 scripts/self_play_train.py --episodes 50
+python3 scripts/capture_once.py --ocr   # needs mss Pillow pytesseract
+```
+
+Optional Ollama planner:
 
 ```bash
 ollama pull dolphin-llama3
@@ -61,53 +95,20 @@ ollama create playmind-planner -f models/Modelfile.playmind
 python3 -m playmind --ollama --ollama-model playmind-planner --episodes 1
 ```
 
-Docs: [docs/FULL_STACK.md](docs/FULL_STACK.md) · [docs/NEXT_STACK.md](docs/NEXT_STACK.md) · [docs/QUICKSTART_V2.md](docs/QUICKSTART_V2.md) · [docs/LEARNING_ARCHITECTURE_V2.md](docs/LEARNING_ARCHITECTURE_V2.md) · [docs/DEMONSTRATION_RECORDING.md](docs/DEMONSTRATION_RECORDING.md) · [docs/TRAINING.md](docs/TRAINING.md) · [docs/EVALUATION.md](docs/EVALUATION.md) · [docs/SENSOR_LABELING.md](docs/SENSOR_LABELING.md) · [docs/SKILLS.md](docs/SKILLS.md) · [docs/MIGRATION.md](docs/MIGRATION.md)
+## Docs
 
-## Learning V2 (skills / hybrid)
+- [QUICKSTART_V2](docs/QUICKSTART_V2.md) · [LEARNING_ARCHITECTURE_V2](docs/LEARNING_ARCHITECTURE_V2.md) · [SKILLS](docs/SKILLS.md)
+- [DEMONSTRATION_RECORDING](docs/DEMONSTRATION_RECORDING.md) · [TRAINING](docs/TRAINING.md) · [EVALUATION](docs/EVALUATION.md)
+- [SENSOR_LABELING](docs/SENSOR_LABELING.md) · [MIGRATION](docs/MIGRATION.md)
+- [FULL_STACK](docs/FULL_STACK.md) · [COMPLIANCE_BOUNDARIES](docs/COMPLIANCE_BOUNDARIES.md)
 
-Default path can use hierarchical skills instead of raw tabular Q:
-
-```json
-"learning_v2": { "enabled": true, "policy_mode": "hybrid" }
-```
-
-See [docs/QUICKSTART_V2.md](docs/QUICKSTART_V2.md) for the eight flows (scripted, demos, review, train, eval, hybrid, legacy, diagnostics). Legacy Q remains as an optional fallback.
-
-```bash
-# 1) Scripted
-# config: learning_v2.policy_mode=scripted
-PYTHONPATH=. python3 scripts/run_owned_loop.py --config config/owned_game.json --max-ticks 30
-
-# 2–3) Record + review demos — docs/DEMONSTRATION_RECORDING.md
-PYTHONPATH=. python3 scripts/train_behavior_clone.py --dry-validate-only
-
-# 4) Train BC
-PYTHONPATH=. python3 scripts/train_behavior_clone.py --checkpoint models/checkpoints/skill_policy_v2.json
-
-# 5) Eval / replay — docs/EVALUATION.md
-
-# 6) Hybrid (default when enabled)
-PYTHONPATH=. python3 scripts/run_owned_loop.py --config config/owned_game.json --max-ticks 30
-
-# 7) Legacy migrate + policy_mode=legacy_q
-PYTHONPATH=. python3 scripts/migrate_legacy_learning.py --data-dir data/playmind/owned
-
-# 8) Diagnostics bundle
-PYTHONPATH=. python3 scripts/export_diagnostics.py
-```
-
-## Safety defaults
-
-- Keyboard sending is **off** unless you set `i_own_this_game=true` and `enable_keyboard=true` and pass `--live`
-- Demo paths never touch remote MMO clients
-
-## Project layout
+## Layout
 
 ```text
-playmind/     agent, vision, capture, actuators, owned loop, session
-scripts/      capture, owned loop, self-play, fine-tune helpers
-config/       keymap + owned_game examples
-docs/         architecture + compliance notes
+playmind/     agent, owned loop, skills, policies, training, GUI
+scripts/      owned loop, BC train/eval, diagnostics, teleop
+config/       owned_game + keymap examples
+docs/         architecture + V2 guides
 tests/
 ```
 
