@@ -1,26 +1,34 @@
-# Behavior-cloning training
+# Recurrent behavior-cloning training
 
-Train (or dry-validate) a skill policy from demonstration sessions. CUDA is optional; without PyTorch the CLI still validates the dataset and exits 0.
+The default trainer builds a `RecurrentSkillPolicyV2` from episode-local demonstration sequences. The path is implemented and tested, but the repository does not include evidence that a trained policy improves live gameplay.
 
 ## Prerequisites
 
 1. Record demos — [DEMONSTRATION_RECORDING.md](./DEMONSTRATION_RECORDING.md)
-2. Optional: `pip install torch` for the training skeleton
+2. Install PyTorch for training. Dry validation does not require it.
 
 ## Commands
 
 ```bash
-# Dry-validate demos (no torch required)
+# Validate default 16-step windows (no torch required)
 PYTHONPATH=. python3 scripts/train_behavior_clone.py --dry-validate-only \
-  --data-dir data/playmind/demonstrations
+  --data-dir data/playmind/demonstrations \
+  --history-length 16
 
-# Train skeleton → checkpoint metadata (uses torch when installed)
+# Train recurrent policy (the default --model-type)
 PYTHONPATH=. python3 scripts/train_behavior_clone.py \
   --data-dir data/playmind/demonstrations \
-  --window-size 4 \
-  --batch-size 8 \
-  --epochs 1 \
-  --checkpoint models/checkpoints/skill_policy_v2.json
+  --model-type recurrent \
+  --history-length 16 \
+  --batch-size 32 \
+  --epochs 30 \
+  --checkpoint models/checkpoints/recurrent_skill_policy.json
+
+# Resume compatible recurrent checkpoint/training state
+PYTHONPATH=. python3 scripts/train_behavior_clone.py \
+  --data-dir data/playmind/demonstrations \
+  --history-length 16 --resume \
+  --checkpoint models/checkpoints/recurrent_skill_policy.json
 ```
 
 Point hybrid mode at the checkpoint:
@@ -29,7 +37,8 @@ Point hybrid mode at the checkpoint:
 "learning_v2": {
   "enabled": true,
   "policy_mode": "hybrid",
-  "bc_checkpoint": "models/checkpoints/skill_policy_v2.json",
+  "history_length": 16,
+  "bc_checkpoint": "models/checkpoints/recurrent_skill_policy.json",
   "confidence_threshold": 0.45,
   "device": "cpu",
   "seed": 0
@@ -38,8 +47,13 @@ Point hybrid mode at the checkpoint:
 
 ## Notes
 
-- Splits are **episode-wise** (`train` / `val` / `test`) via `DemonstrationDataset`
-- Untrained models report low confidence so HybridPolicy falls back to scripted skills
-- Device defaults to `cpu`; set `"device": "cuda"` only when CUDA torch is available
+- Recurrent training uses feature schema v2 (`FEATURE_SCHEMA_VERSION=2`), a 54-D value/known/confidence representation.
+- Train/validation/test assignment is episode-wise; windows never cross `(session_id, episode_id)` boundaries.
+- Bad and unlabeled samples are excluded by default. The CLI does not expose overrides.
+- Windows are left-padded to 16 by default and carry a validity mask; `--stride` and `--min-sequence-length` control window generation.
+- Normalization statistics are fit on the training split only and stored in checkpoint metadata.
+- Validation loss selects the checkpoint; the test split is evaluated after selection. Metrics are also appended to `data/playmind/training/metrics.csv` by default.
+- `--device auto` selects CUDA when available, otherwise CPU. `--no-amp` disables CUDA mixed precision.
+- `--model-type mlp` remains available only for explicit legacy comparisons; it does not use recurrent schema-v2 sequences.
 
-See also: [EVALUATION.md](./EVALUATION.md) · [SKILLS.md](./SKILLS.md)
+See [RECURRENT_POLICY.md](./RECURRENT_POLICY.md), [FEATURE_SCHEMA.md](./FEATURE_SCHEMA.md), and [EVALUATION.md](./EVALUATION.md).

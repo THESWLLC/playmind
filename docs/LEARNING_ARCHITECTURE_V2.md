@@ -1,51 +1,32 @@
 # Learning Architecture V2
 
-**Status:** Implemented on `main` (PR #4 + PR #5)  
-**Intent:** Replace primary coarse tabular Q-learning with hierarchical, temporally aware skill learning while keeping legacy Q as fallback.
+**Status:** Next phase implemented on `cursor/recurrent-policy-phase-3737`. Core behavior is covered by automated tests; useful learned play still needs real demonstrations and measured evaluation.
+**Intent:** Replace primary coarse tabular Q-learning with hierarchical, temporally aware skill learning while keeping legacy Q as an explicit fallback.
 
-**Still local / ops (not missing code):** calibrate your game window/ROIs; record demos; train a BC checkpoint before hybrid beats scripted.
+No visual-learning or live-gameplay improvement claim is made.
 
 ---
 
-## 1. Current architecture (as of audit)
+## 1. Current architecture
 
-### Primary loop (`playmind/owned_loop.py`)
+### Legacy baseline (`playmind/owned_loop.py` when V2 is disabled)
 1. Capture game window → `latest.png`
 2. Build dict observation (`vision_obs_from_frame` + `enrich_obs_from_screen` + OCR/UI memory)
 3. Sticky `LifeFSM` + `ProgressTracker` + `StuckTracker` + `TravelMemory` + `ProcessMemory`
-4. Choose **raw action string** via priority stack:
+4. Choose a raw action string via the original priority stack:
    - Life FSM death/ghost ownership
    - Progress force / process prevention
    - Occasional Screen-LLM / Ollama
-   - **`OnlinePolicy` tabular Q** (`use_learned_policy=True` by default)
+   - `OnlinePolicy` tabular Q
    - Heuristic fallback
-5. Soft reject/scrub some invalid actions
-6. Actuate key/mouse
-7. Recapture aftermath → `reward_owned` + directive/progress bonuses
-8. `policy.update(..., done=False)` always — **no real episode terminals**
-9. Experience append + replay into Q; periodic save of `policy.json`
 
-### Observation flow
-Raw pixels → HP ROI / target bar / desaturation / OCR / UI OCR hits → mutable `dict` with many optional keys silently defaulting (e.g. hp→0.5, bools→False).
+### V2 path (`learning_v2.enabled=true`)
 
-### Action flow
-Unbounded-ish string space: `OWNED_ACTIONS` **plus all keys ever seen in Q-table** plus dynamic `key:` / `hold:` / `click_label:` / LLM inventions → actuator parser.
-
-### Reward flow
-Heavy speculative shaping in `reward_owned` + `progress.reward_bonus` + stuck penalties: pixel motion, having a target, pressing attack, OCR phrase clears, etc. Kill often inferred from **target loss after combat**.
-
-### Persistence (retained)
-| File | Role |
-|------|------|
-| `data/playmind/owned/policy.json` | Tabular Q (legacy) |
-| `experience.jsonl` | Transition log |
-| `ui_memory.json` / `ability_memory.json` | UI/ability memory |
-| `process_memory.json` | Death pipeline / preventions |
-| Travel / lessons / dryrun logs | As today |
+Structured observations are encoded with [feature schema v2](./FEATURE_SCHEMA.md), accumulated into a last-16 history, and passed to a high-level skill policy. The recurrent BC policy uses a GRU; scripted handling remains available for emergencies and low-confidence fallback. [Skill commitment](./SKILL_COMMITMENT.md) gates switching, and the [episode lifecycle](./EPISODE_LIFECYCLE.md) separates gameplay from death recovery.
 
 ---
 
-## 2. Why coarse tabular Q aliases situations
+## 2. Why the legacy coarse tabular Q aliases situations
 
 `owned_state_key` collapses the world to roughly:
 
@@ -57,7 +38,7 @@ So these share one Q-row:
 - Different zones / quests / abilities
 - Momentary OCR flicker of “has_target”
 
-Combined with:
+In the legacy path this combines with:
 - **Invented actions re-entering the action space** from Q keys
 - **`done=False` always** (no episodic credit assignment)
 - **Rewards for pressing buttons / motion / target presence**
@@ -100,19 +81,21 @@ Capture → Sensors(+confidence) → Observation
                                 ↓
          HighLevelPolicy → Skill (masked)
                                 ↓
+                   Commitment / hysteresis
+                                ↓
                     Skill.step → low-level action
                                 ↓
                  ActionMask.validate → Actuator
                                 ↓
               Aftermath sensors → Events → Rewards_v2
                                 ↓
-                     EpisodeManager (+ logs)
+              EpisodeLifecycleController (+ logs)
 ```
 
 ### Policy modes
 1. **Scripted** — deterministic skills (default runnable)
 2. **LegacyQ** — experimental raw-action Q bridge
-3. **BehaviorClone** — skill classifier (after demos/training)
+3. **BehaviorClone** — recurrent skill classifier by default (after demos/training)
 4. **Hybrid** — emergencies scripted; BC if confident; else scripted; LegacyQ opt-in last
 
 ### Data flow (learning)
@@ -121,19 +104,23 @@ Replay env evaluates offline without sending keys.
 
 ---
 
-## 6. Migration plan
+## 6. Next-phase implementation
 
-1. Ship Observation + History + Skills + Masking + ScriptedPolicy + Episodes + Events + Rewards_v2 **without requiring new training data**
-2. Wire `owned_loop` behind config `policy_mode: scripted|hybrid|legacy_q` (default **scripted** or **hybrid** with BC absent → scripted)
-3. Mark existing `policy.json` as legacy; disable inventing actions from Q keys by default
-4. Add demo recorder + BC training when ready
-5. Keep dry-run and owned-game gates unchanged
+Implemented on this branch:
 
-### Expected limitations
-- BC needs human demos before it beats scripted
-- Sensor confidence starts heuristic until labeled metrics exist
-- Skills are initially scripted approximations of current heuristics
-- CUDA optional; CPU must train small models slowly
+- schema-v2 value/known/confidence features and train-only normalization
+- episode-local recurrent windows and `RecurrentSkillPolicyV2`
+- stateless bounded-history live inference and strict skill-logit masking
+- skill commitment, hysteresis, emergency interrupts, and switch diagnostics
+- gameplay/recovery episode lifecycle with controllability gating
+- evidence-separated offline evaluation and baseline comparisons
+
+Still needed for a useful deployment:
+
+- calibrate sensors and controls for the owned game
+- record sufficient labeled demonstrations
+- train and evaluate on held-out episodes
+- run controlled live trials before claiming gameplay improvement
 
 ---
 
@@ -149,14 +136,21 @@ Replay env evaluates offline without sending keys.
 - [x] `playmind/events.py` + `rewards_v2.py`
 - [x] `playmind/learning_v2_controller.py` + `owned_loop` config gate
 - [x] `playmind/models/policy_v2.py` + BC train/eval scripts
+- [x] `playmind/models/feature_schema.py` (`FEATURE_SCHEMA_VERSION=2`)
+- [x] `playmind/models/recurrent_policy.py` + sequence-aware training
+- [x] `playmind/skill_commitment.py` + controller gating
+- [x] `playmind/life_episode.py` + recovery/gameplay boundaries
+- [x] Outcome-section evaluation + scripted/legacy/random/human/checkpoint baselines
 - [x] Sensor metrics + `scripts/review_sensor_frames.py`
 - [x] Owned GUI V2 (policy mode, demos, episode reset, diagnostics)
 - [x] Tests for new modules
 - [x] `playmind/config_v2.py` (validated settings)
 - [x] `playmind/migration.py` + `scripts/migrate_legacy_learning.py`
 - [x] `playmind/diagnostics.py` + `scripts/export_diagnostics.py`
-- [x] Docs: QUICKSTART_V2, DEMONSTRATION_RECORDING, TRAINING, EVALUATION, SENSOR_LABELING, SKILLS, MIGRATION
+- [x] Docs: QUICKSTART_V2, DEMONSTRATION_RECORDING, TRAINING, EVALUATION, RECURRENT_POLICY, SKILL_COMMITMENT, EPISODE_LIFECYCLE, FEATURE_SCHEMA
 - [ ] Richer multi-tab GUI / heavier sensor labeling product polish (follow-on)
+- [ ] Real demonstration corpus, trained checkpoint results, and measured live trials
+- [ ] Visual learning (encoder is currently a placeholder)
 
 Enable via `learning_v2.enabled` in `owned_game.json` — see [QUICKSTART_V2.md](./QUICKSTART_V2.md).
 
@@ -174,6 +168,10 @@ Full validated settings: `playmind/config_v2.py` (`LearningV2Settings`).
   "history_length": 16,
   "bc_checkpoint": null,
   "confidence_threshold": 0.45,
+  "commitment_confidence_margin": 0.15,
+  "minimum_commitment_seconds": 0.4,
+  "maximum_commitment_seconds": 25.0,
+  "controllable_frames": 3,
   "device": "cpu",
   "seed": 0
 }

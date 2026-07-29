@@ -2,7 +2,9 @@
 
 See also: [LEARNING_ARCHITECTURE_V2.md](./LEARNING_ARCHITECTURE_V2.md)
 
-**Docs:** [DEMONSTRATION_RECORDING](./DEMONSTRATION_RECORDING.md) · [TRAINING](./TRAINING.md) · [EVALUATION](./EVALUATION.md) · [SENSOR_LABELING](./SENSOR_LABELING.md) · [SKILLS](./SKILLS.md) · [MIGRATION](./MIGRATION.md)
+**Docs:** [RECURRENT_POLICY](./RECURRENT_POLICY.md) · [SKILL_COMMITMENT](./SKILL_COMMITMENT.md) · [EPISODE_LIFECYCLE](./EPISODE_LIFECYCLE.md) · [FEATURE_SCHEMA](./FEATURE_SCHEMA.md) · [DEMONSTRATION_RECORDING](./DEMONSTRATION_RECORDING.md) · [TRAINING](./TRAINING.md) · [EVALUATION](./EVALUATION.md)
+
+The next-phase runtime is implemented and tested on this branch. A useful learned policy still requires real demonstrations and measured evaluation; visual learning and live improvement are not established.
 
 ## Enable skill-based policy (no training required)
 
@@ -17,6 +19,10 @@ In `config/owned_game.json`:
   "track_episodes": true,
   "history_length": 16,
   "confidence_threshold": 0.45,
+  "commitment_confidence_margin": 0.15,
+  "minimum_commitment_seconds": 0.4,
+  "maximum_commitment_seconds": 25.0,
+  "controllable_frames": 3,
   "device": "cpu",
   "seed": 0
 }
@@ -28,7 +34,7 @@ Modes:
 - `legacy_q` — experimental raw tabular Q bridge
 - `behavior_clone` — BC primary (same fallbacks as hybrid if checkpoint missing/low-confidence)
 
-Set `"bc_checkpoint": "models/checkpoints/skill_policy_v2.json"` after training to use the MLP.
+Set `"bc_checkpoint": "models/checkpoints/recurrent_skill_policy.json"` after training to use the recurrent policy. Legacy MLP checkpoints remain loadable explicitly.
 
 Validate settings:
 
@@ -94,7 +100,8 @@ for s in list_sessions():
 PY
 
 PYTHONPATH=. python3 scripts/train_behavior_clone.py --dry-validate-only \
-  --data-dir data/playmind/demonstrations
+  --data-dir data/playmind/demonstrations \
+  --history-length 16
 ```
 
 ### 4. Training behavior cloning
@@ -102,8 +109,8 @@ PYTHONPATH=. python3 scripts/train_behavior_clone.py --dry-validate-only \
 ```bash
 PYTHONPATH=. python3 scripts/train_behavior_clone.py \
   --data-dir data/playmind/demonstrations \
-  --window-size 4 --batch-size 8 --epochs 1 \
-  --checkpoint models/checkpoints/skill_policy_v2.json
+  --history-length 16 --batch-size 32 --epochs 30 \
+  --checkpoint models/checkpoints/recurrent_skill_policy.json
 ```
 
 Details: [TRAINING.md](./TRAINING.md)
@@ -111,24 +118,18 @@ Details: [TRAINING.md](./TRAINING.md)
 ### 5. Evaluating a checkpoint
 
 ```bash
-PYTHONPATH=. python3 - <<'PY'
-from playmind.models.policy_v2 import SkillPolicyV2
-from playmind.demonstrations import list_sessions
-from playmind.replay_env import ReplayEnv
+# Sequence-aware held-out evaluation
+PYTHONPATH=. python3 scripts/evaluate_behavior_clone.py \
+  --data-dir data/playmind/demonstrations \
+  --checkpoint models/checkpoints/recurrent_skill_policy.json \
+  --history-length 16 --split test \
+  --json-out data/playmind/evaluation/recurrent-test.json
 
-policy = SkillPolicyV2.load("models/checkpoints/skill_policy_v2.json")
-sessions = list_sessions()
-print("trained=", policy.trained)
-if sessions:
-    env = ReplayEnv.from_session(sessions[0], policy=policy)
-    env.reset()
-    n = 0
-    while not env.done:
-        if env.step() is None:
-            break
-        n += 1
-    print("replayed=", n)
-PY
+# Baselines + evidence-separated comparative report
+PYTHONPATH=. python3 scripts/run_evaluation.py \
+  --data-dir data/playmind/demonstrations \
+  --checkpoints models/checkpoints/recurrent_skill_policy.json \
+  --output-dir data/playmind/evaluation/recurrent-comparison
 ```
 
 Details: [EVALUATION.md](./EVALUATION.md)
@@ -136,11 +137,12 @@ Details: [EVALUATION.md](./EVALUATION.md)
 ### 6. Running hybrid mode
 
 ```bash
-# learning_v2.policy_mode = "hybrid" (default), optional bc_checkpoint
+# learning_v2.policy_mode = "hybrid" and set bc_checkpoint above
 PYTHONPATH=. python3 scripts/run_owned_loop.py --config config/owned_game.json --max-ticks 30
 ```
 
 Without a trained checkpoint, hybrid safely falls back to scripted skills.
+Live actuation remains separately gated by ownership/configuration and `--live`.
 
 ### 7. Reverting to legacy mode
 
@@ -171,4 +173,4 @@ PYTHONPATH=. python3 scripts/export_diagnostics.py \
 
 Existing `policy.json` is retained. With V2 enabled and `policy_mode` ≠ `legacy_q`, raw Q no longer chooses actions every tick. Set `"legacy_q_fallback": true` only for experiments.
 
-Status logs include `active_skill`, `learning_v2`, `reward_v2`, and `episode_id`.
+Status logs include the active skill, commitment diagnostics, lifecycle/episode fields, `learning_v2`, and `reward_v2`.
