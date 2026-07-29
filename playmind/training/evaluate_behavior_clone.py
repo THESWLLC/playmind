@@ -13,6 +13,7 @@ from playmind.models.policy_v2 import (
     structured_feature_vector,
 )
 from playmind.models.recurrent_policy import RecurrentSkillPolicyV2
+from playmind.evaluation.metrics import outcome_evaluation_report
 from playmind.training.dataset import (
     DemonstrationDataset,
     assert_no_split_leakage,
@@ -161,17 +162,47 @@ def evaluate_behavior_clone(
     y_true: list[str] = []
     y_pred: list[str] = []
     confidences: list[float] = []
+    replay_rows: list[dict[str, Any]] = []
     top2_correct = top3_correct = 0
     for index in range(len(dataset)):
         item = dataset[index]
         truth = str(item.get("skill") or "wait")
         ranked, confidence = _predict_ranked(policy, item)
         prediction = ranked[0]
+        if isinstance(policy, RecurrentSkillPolicyV2):
+            _aux_skill, _aux_confidence, aux_predictions = policy.predict(item["features"])
+        else:
+            _aux_skill, _aux_confidence, aux_predictions = policy.predict(
+                _vectorize_item(item, policy.feature_dim)
+            )
         y_true.append(truth)
         y_pred.append(prediction)
         confidences.append(confidence)
         top2_correct += truth in ranked[:2]
         top3_correct += truth in ranked[:3]
+        replay_rows.append(
+            {
+                "observation": dict(item.get("observation") or {}),
+                "allowed_skills": list(policy.skill_names),
+                "sample": {
+                    **dict(item),
+                    "skill": truth,
+                    "observation": dict(item.get("observation") or {}),
+                },
+                "decision": {
+                    "skill": prediction,
+                    "confidence": confidence,
+                    "reason": "behavior-clone offline classification",
+                    "model_version": getattr(policy, "model_version", None),
+                    "allowed_skills": list(policy.skill_names),
+                    "used_fallback": not bool(getattr(policy, "trained", False)),
+                    "debug_scores": {
+                        f"aux_{key}": float(value)
+                        for key, value in aux_predictions.items()
+                    },
+                },
+            }
+        )
 
     labels = sorted(set(y_true) | set(y_pred) | set(policy.skill_names))
     count = len(y_true)
@@ -198,6 +229,22 @@ def evaluate_behavior_clone(
         "sequence_length_stats": dataset.validate()["sequence_lengths"],
         "leakage_check": {"passed": True, "shared_episode_ids": []},
     }
+    outcome_report = outcome_evaluation_report(
+        replay_rows,
+        policy_name=type(policy).__name__,
+    )
+    # Keep the established flat label metrics above and add evidence-separated
+    # gameplay evaluation for consumers that need outcome semantics.
+    report.update(
+        {
+            "observed_outcomes": outcome_report["observed_outcomes"],
+            "label_agreement": outcome_report["label_agreement"],
+            "model_predicted": outcome_report["model_predicted"],
+            "counterfactual_estimates": outcome_report["counterfactual_estimates"],
+            "decision_validity": outcome_report["decision_validity"],
+            "temporal": outcome_report["temporal"],
+        }
+    )
     return report
 
 

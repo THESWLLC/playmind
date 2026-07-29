@@ -8,8 +8,10 @@ from pathlib import Path
 from typing import Any, Mapping, Sequence
 
 from playmind.evaluation.metrics import summarize_replay_results
+from playmind.policies.base import PolicyDecision
+from playmind.policies.hybrid import HybridPolicy
 from playmind.policies.legacy_q import LegacyQPolicy
-from playmind.policies.scripted import ScriptedPolicy
+from playmind.policies.scripted import DEFAULT_SKILL_ORDER, ScriptedPolicy
 from playmind.replay_env import ReplayEnv
 
 # ---------------------------------------------------------------------------
@@ -68,6 +70,7 @@ SCENARIO_SPECS: dict[str, list[dict[str, Any]]] = {
                 "life_phase": "alive",
             },
             "skill": "loot_target",
+            "key_events": ["confirmed_kill"],
         },
     ],
     "modal_and_stuck": [
@@ -139,7 +142,7 @@ def build_synthetic_session(
                 "timestamp": float(i),
                 "frame_path": None,
                 "observation": dict(step.get("observation") or {}),
-                "key_events": [],
+                "key_events": list(step.get("key_events") or []),
                 "goal": scenario_name,
                 "skill": step.get("skill"),
                 "label": "success",
@@ -184,7 +187,7 @@ def run_scenario(
                     "observation": dict(step.get("observation") or {}),
                     "skill": step.get("skill"),
                     "index": i,
-                    "key_events": [],
+                    "key_events": list(step.get("key_events") or []),
                 }
             )
         env = ReplayEnv(samples=samples, policy=policy)
@@ -269,9 +272,60 @@ class _LegacyStubPolicy:
         return decision
 
 
+class RandomValidSkillPolicy:
+    """Deterministic cycling reference with random-policy class frequencies."""
+
+    model_version = "random-valid-skill-v1"
+
+    def __init__(self) -> None:
+        self._index = 0
+
+    def reset_state(self) -> None:
+        self._index = 0
+
+    def choose_skill(
+        self, context: Mapping[str, Any], allowed_skills: Sequence[str]
+    ) -> PolicyDecision:
+        allowed = list(dict.fromkeys(str(skill) for skill in allowed_skills))
+        skill = allowed[self._index % len(allowed)] if allowed else "wait"
+        self._index += 1
+        return PolicyDecision(
+            skill=skill,
+            confidence=1.0 / float(max(1, len(allowed))),
+            reason="deterministic random-valid-skill reference",
+            model_version=self.model_version,
+            allowed_skills=allowed,
+        )
+
+
+class HumanDemonstrationPolicy:
+    """Reference policy that emits the recorded human skill label."""
+
+    model_version = "human-demonstration-reference-v1"
+
+    def choose_skill(
+        self, context: Mapping[str, Any], allowed_skills: Sequence[str]
+    ) -> PolicyDecision:
+        allowed = list(dict.fromkeys(str(skill) for skill in allowed_skills))
+        label = str(context.get("demo_skill") or "wait")
+        skill = label if label in set(allowed) else ("wait" if "wait" in allowed else label)
+        return PolicyDecision(
+            skill=skill,
+            confidence=1.0,
+            reason="recorded human demonstration reference",
+            model_version=self.model_version,
+            allowed_skills=allowed,
+            used_fallback=skill != label,
+            debug_scores={label: 1.0},
+        )
+
+
 def make_baseline_policies() -> dict[str, Any]:
-    """Scripted vs legacy-Q stub policies for comparison CLIs."""
+    """CPU-only baselines that also work when no demonstrations exist."""
     return {
         "scripted": ScriptedPolicy(),
         "legacy_stub": _LegacyStubPolicy(),
+        "random_valid_skill": RandomValidSkillPolicy(),
+        "hybrid": HybridPolicy(),
+        "human_demo": HumanDemonstrationPolicy(),
     }
