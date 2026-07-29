@@ -61,7 +61,17 @@ ollama create playmind-planner -f models/Modelfile.playmind
 python3 -m playmind --ollama --ollama-model playmind-planner --episodes 1
 ```
 
-Docs: [docs/FULL_STACK.md](docs/FULL_STACK.md) · [docs/NEXT_STACK.md](docs/NEXT_STACK.md)
+Docs: [docs/FULL_STACK.md](docs/FULL_STACK.md) · [docs/NEXT_STACK.md](docs/NEXT_STACK.md) · [docs/QUICKSTART_V2.md](docs/QUICKSTART_V2.md) · [docs/LEARNING_ARCHITECTURE_V2.md](docs/LEARNING_ARCHITECTURE_V2.md)
+
+## Learning V2 (skills / hybrid)
+
+Default path can use hierarchical skills instead of raw tabular Q:
+
+```json
+"learning_v2": { "enabled": true, "policy_mode": "hybrid" }
+```
+
+See [docs/QUICKSTART_V2.md](docs/QUICKSTART_V2.md). Legacy Q remains as an optional fallback.
 
 ## Safety defaults
 

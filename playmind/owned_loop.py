@@ -51,6 +51,7 @@ from playmind.travel import TravelMemory
 from playmind.ui_memory import UIMemory, discover_and_remember, ensure_seeded
 from playmind.soul import feel_soul
 from playmind.life_fsm import LifeFSM
+from playmind.learning_v2_controller import LearningV2Config, LearningV2Controller
 from playmind.vision import (
     detect_death_dialog,
     detect_hostile_nameplate_ocr,
@@ -88,6 +89,8 @@ class OwnedLoopConfig:
     use_teacher: bool = True
     teacher_model: str = "llama3.2"
     teacher_every: int = 12  # at most every N bad ticks
+    # Learning Architecture V2 (skills / hybrid). Overrides raw-Q when enabled in config.
+    learning_v2: LearningV2Config | None = None
 
 
 def load_owned_config(path: Path) -> dict[str, Any]:
@@ -199,6 +202,7 @@ class OwnedGameLoop:
     _progress: ProgressTracker = field(default_factory=ProgressTracker)
     _process: ProcessMemory | None = None
     _recent: list[tuple[dict[str, Any], str]] = field(default_factory=list)
+    _v2: LearningV2Controller | None = None
 
     def _action_space(self, policy: OnlinePolicy, extra: str | None = None) -> list[str]:
         acts: list[str] = list(OWNED_ACTIONS)
@@ -364,6 +368,21 @@ class OwnedGameLoop:
             key_fn=owned_state_key,
         )
         prior = buffer.load()
+
+        v2_cfg = self.cfg.learning_v2 or LearningV2Config.from_owned_dict(owned)
+        self._v2 = None
+        if v2_cfg.enabled:
+            self._v2 = LearningV2Controller(cfg=v2_cfg)
+            self._v2.attach_legacy_q(policy)
+            self._v2.ensure_episode(self.cfg.data_dir)
+            # When V2 is primary, disable raw Q action selection unless legacy mode.
+            if v2_cfg.policy_mode != "legacy_q":
+                self.cfg.use_learned_policy = False
+            print(
+                f"Learning V2 enabled mode={v2_cfg.policy_mode} "
+                f"legacy_q_fallback={v2_cfg.legacy_q_fallback} "
+                f"rewards_v2={v2_cfg.use_rewards_v2}"
+            )
 
         self._goal = parse_directive(self.directive)
         print(f"Directive goal: {self._goal.summary()} ({self._goal.raw!r})")
@@ -567,6 +586,15 @@ class OwnedGameLoop:
                         goal = self._goal or parse_directive(self.directive)
                         reward += directive_reward_bonus(goal, obs, action, next_obs)
                         reward += self._progress.reward_bonus(obs, action, next_obs)
+                        if self._v2 is not None and self._v2.cfg.enabled:
+                            reward = self._v2.note_transition(
+                                obs,
+                                action,
+                                action,
+                                next_obs,
+                                dt=float(self.cfg.tick_seconds),
+                                legacy_reward=reward,
+                            )
                         self._progress.note(obs, action, next_obs, reward)
                         next_obs = self._progress.patch_obs(next_obs)
                         # Death cause → prevention; successful death clicks → pipeline memory.
@@ -736,6 +764,8 @@ class OwnedGameLoop:
                     "mode": mode,
                     "frame": str(cap.path),
                 }
+                if self._v2 is not None and self._v2.cfg.enabled:
+                    status.update(self._v2.status_patch())
                 if self.on_status:
                     self.on_status(status)
                 else:
@@ -962,6 +992,20 @@ class OwnedGameLoop:
         obs: dict[str, Any],
         frame_path: Path | None = None,
     ) -> str:
+        # Learning V2: high-level skill policy owns the tick (legacy Q optional).
+        if self._v2 is not None and self._v2.cfg.enabled:
+            goal = self._goal or parse_directive(self.directive)
+            act = self._v2.choose_action(
+                obs, tick=self._tick, goal_summary=goal.summary()
+            )
+            self._decision_reason = self._v2.last_decision_reason
+            if isinstance(planner, ScreenLLMPlanner):
+                planner.last_mode = self._decision_reason
+                planner.last_raw = (
+                    f"(learning_v2 skill={self._v2.last_skill}) → {act}"
+                )
+            return act
+
         space = self._action_space(policy)
 
         # Life FSM owns death/ghost — Q and VLM cannot farm while grey.
