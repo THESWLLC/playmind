@@ -1,5 +1,7 @@
-# PlayMind core (stdlib-only demo needs none of these).
-# Optional extras for later vision / local LLM phases:
-# requests>=2.31.0
+# PlayMind core demo is stdlib-only.
+# Optional vision extras (install when you want screenshot OCR):
+# Pillow>=10.0.0
+# pytesseract>=0.3.10
 # opencv-python-headless>=4.8.0
 # numpy>=1.26.0
+# requests>=2.31.0

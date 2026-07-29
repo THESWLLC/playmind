@@ -1,0 +1,11 @@
+{
+  "move_north": "w",
+  "move_south": "s",
+  "move_west": "a",
+  "move_east": "d",
+  "attack": "1",
+  "loot": "f",
+  "interact": "e",
+  "open_quest_log": "l",
+  "wait": null
+}
