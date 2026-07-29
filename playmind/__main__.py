@@ -6,7 +6,12 @@ import argparse
 import time
 from pathlib import Path
 
-from playmind.actuators import DemoActuator, DryRunKeyboardActuator, ParsecKeyboardActuator
+from playmind.actuators import (
+    DemoActuator,
+    DryRunKeyboardActuator,
+    OwnedGameKeyboardActuator,
+    ParsecKeyboardActuator,
+)
 from playmind.agent import AgentConfig, PlayMindAgent
 from playmind.demo_world import DemoWorld
 from playmind.teach import prompt_teacher
@@ -16,7 +21,10 @@ def build_actuator(name: str):
     if name == "dry-run":
         return DryRunKeyboardActuator()
     if name == "parsec-stub":
-        return ParsecKeyboardActuator(enabled=False)
+        return ParsecKeyboardActuator(enabled=False, i_own_this_game=False)
+    if name == "owned-keyboard":
+        # Still disabled unless caller enables on the instance; CLI keeps it safe.
+        return OwnedGameKeyboardActuator(enabled=False, i_own_this_game=False)
     return DemoActuator()
 
 
@@ -78,9 +86,9 @@ def main() -> None:
     parser.add_argument("--directive", default="")
     parser.add_argument(
         "--actuator",
-        choices=["demo", "dry-run", "parsec-stub"],
+        choices=["demo", "dry-run", "parsec-stub", "owned-keyboard"],
         default="demo",
-        help="demo=in-process, dry-run=log keys, parsec-stub=future Parsec hook",
+        help="demo=in-process; dry-run=log keys; owned-keyboard/parsec stubs stay disabled here",
     )
     parser.add_argument("--data-dir", default="data/playmind")
     args = parser.parse_args()

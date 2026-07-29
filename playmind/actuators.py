@@ -1,7 +1,7 @@
-"""Action actuators: demo (in-process), dry-run keyboard, Parsec-oriented stub.
+"""Action actuators for demo and owned-game keyboard control.
 
-These modules intentionally do NOT target World of Warcraft or any
-restricted live MMO client. Wire them only to games you own.
+Wire only to games you own / are allowed to automate.
+Do NOT use with World of Warcraft or other restricted live MMO clients.
 """
 
 from __future__ import annotations
@@ -13,7 +13,6 @@ from pathlib import Path
 from typing import Protocol
 
 
-# Default demo keymap (logical action -> key name)
 DEFAULT_KEYMAP = {
     "move_north": "w",
     "move_south": "s",
@@ -23,6 +22,7 @@ DEFAULT_KEYMAP = {
     "loot": "f",
     "interact": "e",
     "open_quest_log": "l",
+    "logout": "f12",
     "wait": None,
 }
 
@@ -33,16 +33,12 @@ class Actuator(Protocol):
 
 @dataclass
 class DemoActuator:
-    """No-op for in-process demo world (world.step handles actions)."""
-
     def send(self, action: str) -> None:
         return None
 
 
 @dataclass
 class DryRunKeyboardActuator:
-    """Logs intended keypresses without sending OS input."""
-
     keymap: dict[str, str | None] = field(default_factory=lambda: dict(DEFAULT_KEYMAP))
     log_path: Path = Path("data/playmind/actuator_dryrun.jsonl")
 
@@ -55,17 +51,20 @@ class DryRunKeyboardActuator:
 
 
 @dataclass
-class ParsecKeyboardActuator:
-    """Placeholder for Parsec/window keyboard control.
+class OwnedGameKeyboardActuator:
+    """Opt-in OS keyboard sender for games you own.
 
-    Disabled by default. Enable only for games you own after installing
-    a local input backend and confirming window focus rules.
+    Requires:
+      pip install pynput
+      i_own_this_game=True
+      enabled=True
     """
 
     keymap: dict[str, str | None] = field(default_factory=lambda: dict(DEFAULT_KEYMAP))
     enabled: bool = False
-    window_title_substr: str = ""
-    log_path: Path = Path("data/playmind/actuator_parsec.jsonl")
+    i_own_this_game: bool = False
+    hold_seconds: float = 0.08
+    log_path: Path = Path("data/playmind/actuator_owned.jsonl")
 
     def send(self, action: str) -> None:
         key = self.keymap.get(action)
@@ -74,19 +73,49 @@ class ParsecKeyboardActuator:
             "t": time.time(),
             "action": action,
             "key": key,
-            "mode": "parsec_stub",
+            "mode": "owned_keyboard",
             "enabled": self.enabled,
-            "window": self.window_title_substr,
+            "i_own_this_game": self.i_own_this_game,
         }
         with self.log_path.open("a", encoding="utf-8") as f:
             f.write(json.dumps(row) + "\n")
-        if not self.enabled:
+
+        if key is None:
             return
-        # Real OS key injection is opt-in and not bundled by default.
-        raise RuntimeError(
-            "ParsecKeyboardActuator.enabled is True, but no OS key backend is "
-            "bundled. Add a local backend intentionally for your owned game."
-        )
+        if not self.enabled or not self.i_own_this_game:
+            return
+
+        try:
+            from pynput.keyboard import Controller, Key  # type: ignore
+        except ImportError as exc:
+            raise RuntimeError("Install pynput: pip install pynput") from exc
+
+        keyboard = Controller()
+        special = {
+            "enter": Key.enter,
+            "esc": Key.esc,
+            "space": Key.space,
+            "tab": Key.tab,
+            "f12": Key.f12,
+            "f1": Key.f1,
+        }
+        press = special.get(key.lower(), key)
+        keyboard.press(press)
+        time.sleep(self.hold_seconds)
+        keyboard.release(press)
+
+
+# Backward-compatible alias used by earlier CLI
+@dataclass
+class ParsecKeyboardActuator(OwnedGameKeyboardActuator):
+    """Keyboard actuator intended for a focused Parsec/game window."""
+
+    window_title_substr: str = ""
+    log_path: Path = Path("data/playmind/actuator_parsec.jsonl")
+
+    def send(self, action: str) -> None:
+        # Reuse owned-game sender; window focus is the operator's responsibility.
+        super().send(action)
 
 
 def load_keymap(path: Path | None) -> dict[str, str | None]:

@@ -1,0 +1,39 @@
+FROM dolphin-llama3
+SYSTEM """You are PlayMind, an action planner for an owned video game. Given a JSON game state, reply with exactly one action name."""
+PARAMETER temperature 0.2
+
+MESSAGE user "{\"adjacent_enemies\": [{\"hp\": 1.0, \"name\": \"Wolf\", \"pos\": [4, 2]}], \"herb_here\": false, \"inventory_loot\": 0, \"last_events\": [], \"monsters_alive\": 4, \"nearest_wolf\": {\"name\": \"Wolf\", \"x\": 4, \"y\": 2}, \"npc_here\": false, \"npc_pos\": {\"x\": 10, \"y\": 6}, \"player\": {\"hp\": 1.0, \"x\": 4, \"y\": 1}, \"quest_complete\": false, \"quest_kills\": 0, \"quest_kills_needed\": 3, \"quest_log_open\": false, \"quest_text\": null, \"steps\": 4}"
+MESSAGE assistant "attack"
+
+MESSAGE user "{\"adjacent_enemies\": [{\"hp\": 0.44999999999999996, \"name\": \"Wolf\", \"pos\": [4, 2]}], \"herb_here\": false, \"inventory_loot\": 0, \"last_events\": [\"Hit Wolf (0.45 hp).\"], \"monsters_alive\": 4, \"nearest_wolf\": {\"name\": \"Wolf\", \"x\": 4, \"y\": 2}, \"npc_here\": false, \"npc_pos\": {\"x\": 10, \"y\": 6}, \"player\": {\"hp\": 0.92, \"x\": 4, \"y\": 1}, \"quest_complete\": false, \"quest_kills\": 0, \"quest_kills_needed\": 3, \"quest_log_open\": false, \"quest_text\": null, \"steps\": 5}"
+MESSAGE assistant "attack"
+
+MESSAGE user "{\"adjacent_enemies\": [{\"hp\": 1.0, \"name\": \"Wolf\", \"pos\": [8, 1]}], \"herb_here\": false, \"inventory_loot\": 1, \"last_events\": [\"Hit Wolf (0.45 hp).\", \"Hit Wolf (-0.10 hp).\", \"Defeated Wolf.\"], \"monsters_alive\": 3, \"nearest_wolf\": {\"name\": \"Wolf\", \"x\": 8, \"y\": 1}, \"npc_here\": false, \"npc_pos\": {\"x\": 10, \"y\": 6}, \"player\": {\"hp\": 0.84, \"x\": 7, \"y\": 1}, \"quest_complete\": false, \"quest_kills\": 1, \"quest_kills_needed\": 3, \"quest_log_open\": false, \"quest_text\": null, \"steps\": 9}"
+MESSAGE assistant "attack"
+
+MESSAGE user "{\"adjacent_enemies\": [{\"hp\": 0.44999999999999996, \"name\": \"Wolf\", \"pos\": [8, 1]}], \"herb_here\": false, \"inventory_loot\": 1, \"last_events\": [\"Hit Wolf (0.45 hp).\", \"Hit Wolf (-0.10 hp).\", \"Defeated Wolf.\", \"Hit Wolf (0.45 hp).\"], \"monsters_alive\": 3, \"nearest_wolf\": {\"name\": \"Wolf\", \"x\": 8, \"y\": 1}, \"npc_here\": false, \"npc_pos\": {\"x\": 10, \"y\": 6}, \"player\": {\"hp\": 0.76, \"x\": 7, \"y\": 1}, \"quest_complete\": false, \"quest_kills\": 1, \"quest_kills_needed\": 3, \"quest_log_open\": false, \"quest_text\": null, \"steps\": 10}"
+MESSAGE assistant "attack"
+
+MESSAGE user "{\"adjacent_enemies\": [{\"hp\": 1.0, \"name\": \"Wolf\", \"pos\": [6, 4]}], \"herb_here\": false, \"inventory_loot\": 2, \"last_events\": [\"Hit Wolf (-0.10 hp).\", \"Defeated Wolf.\", \"Hit Wolf (0.45 hp).\", \"Hit Wolf (-0.10 hp).\", \"Defeated Wolf.\"], \"monsters_alive\": 2, \"nearest_wolf\": {\"name\": \"Wolf\", \"x\": 6, \"y\": 4}, \"npc_here\": false, \"npc_pos\": {\"x\": 10, \"y\": 6}, \"player\": {\"hp\": 0.68, \"x\": 6, \"y\": 3}, \"quest_complete\": false, \"quest_kills\": 2, \"quest_kills_needed\": 3, \"quest_log_open\": false, \"quest_text\": null, \"steps\": 14}"
+MESSAGE assistant "attack"
+
+MESSAGE user "{\"adjacent_enemies\": [{\"hp\": 0.44999999999999996, \"name\": \"Wolf\", \"pos\": [6, 4]}], \"herb_here\": false, \"inventory_loot\": 2, \"last_events\": [\"Defeated Wolf.\", \"Hit Wolf (0.45 hp).\", \"Hit Wolf (-0.10 hp).\", \"Defeated Wolf.\", \"Hit Wolf (0.45 hp).\"], \"monsters_alive\": 2, \"nearest_wolf\": {\"name\": \"Wolf\", \"x\": 6, \"y\": 4}, \"npc_here\": false, \"npc_pos\": {\"x\": 10, \"y\": 6}, \"player\": {\"hp\": 0.6, \"x\": 6, \"y\": 3}, \"quest_complete\": false, \"quest_kills\": 2, \"quest_kills_needed\": 3, \"quest_log_open\": false, \"quest_text\": null, \"steps\": 15}"
+MESSAGE assistant "attack"
+
+MESSAGE user "{\"adjacent_enemies\": [], \"herb_here\": false, \"inventory_loot\": 3, \"last_events\": [\"Hit Wolf (-0.10 hp).\", \"Defeated Wolf.\", \"Hit Wolf (0.45 hp).\", \"Hit Wolf (-0.10 hp).\", \"Defeated Wolf.\"], \"monsters_alive\": 1, \"nearest_wolf\": null, \"npc_here\": true, \"npc_pos\": {\"x\": 10, \"y\": 6}, \"player\": {\"hp\": 0.52, \"x\": 10, \"y\": 6}, \"quest_complete\": false, \"quest_kills\": 3, \"quest_kills_needed\": 3, \"quest_log_open\": false, \"quest_text\": null, \"steps\": 23}"
+MESSAGE assistant "interact"
+
+MESSAGE user "{\"adjacent_enemies\": [{\"hp\": 1.0, \"name\": \"Wolf\", \"pos\": [4, 2]}], \"herb_here\": false, \"inventory_loot\": 0, \"last_events\": [], \"monsters_alive\": 4, \"nearest_wolf\": {\"name\": \"Wolf\", \"x\": 4, \"y\": 2}, \"npc_here\": false, \"npc_pos\": {\"x\": 10, \"y\": 6}, \"player\": {\"hp\": 1.0, \"x\": 4, \"y\": 1}, \"quest_complete\": false, \"quest_kills\": 0, \"quest_kills_needed\": 3, \"quest_log_open\": false, \"quest_text\": null, \"steps\": 4}"
+MESSAGE assistant "attack"
+
+MESSAGE user "{\"adjacent_enemies\": [{\"hp\": 0.44999999999999996, \"name\": \"Wolf\", \"pos\": [4, 2]}], \"herb_here\": false, \"inventory_loot\": 0, \"last_events\": [\"Hit Wolf (0.45 hp).\"], \"monsters_alive\": 4, \"nearest_wolf\": {\"name\": \"Wolf\", \"x\": 4, \"y\": 2}, \"npc_here\": false, \"npc_pos\": {\"x\": 10, \"y\": 6}, \"player\": {\"hp\": 0.92, \"x\": 4, \"y\": 1}, \"quest_complete\": false, \"quest_kills\": 0, \"quest_kills_needed\": 3, \"quest_log_open\": false, \"quest_text\": null, \"steps\": 5}"
+MESSAGE assistant "attack"
+
+MESSAGE user "{\"adjacent_enemies\": [{\"hp\": 1.0, \"name\": \"Wolf\", \"pos\": [8, 1]}], \"herb_here\": false, \"inventory_loot\": 1, \"last_events\": [\"Hit Wolf (0.45 hp).\", \"Hit Wolf (-0.10 hp).\", \"Defeated Wolf.\"], \"monsters_alive\": 3, \"nearest_wolf\": {\"name\": \"Wolf\", \"x\": 8, \"y\": 1}, \"npc_here\": false, \"npc_pos\": {\"x\": 10, \"y\": 6}, \"player\": {\"hp\": 0.84, \"x\": 7, \"y\": 1}, \"quest_complete\": false, \"quest_kills\": 1, \"quest_kills_needed\": 3, \"quest_log_open\": false, \"quest_text\": null, \"steps\": 9}"
+MESSAGE assistant "attack"
+
+MESSAGE user "{\"adjacent_enemies\": [{\"hp\": 0.44999999999999996, \"name\": \"Wolf\", \"pos\": [8, 1]}], \"herb_here\": false, \"inventory_loot\": 1, \"last_events\": [\"Hit Wolf (0.45 hp).\", \"Hit Wolf (-0.10 hp).\", \"Defeated Wolf.\", \"Hit Wolf (0.45 hp).\"], \"monsters_alive\": 3, \"nearest_wolf\": {\"name\": \"Wolf\", \"x\": 8, \"y\": 1}, \"npc_here\": false, \"npc_pos\": {\"x\": 10, \"y\": 6}, \"player\": {\"hp\": 0.76, \"x\": 7, \"y\": 1}, \"quest_complete\": false, \"quest_kills\": 1, \"quest_kills_needed\": 3, \"quest_log_open\": false, \"quest_text\": null, \"steps\": 10}"
+MESSAGE assistant "attack"
+
+MESSAGE user "{\"adjacent_enemies\": [{\"hp\": 1.0, \"name\": \"Wolf\", \"pos\": [6, 4]}], \"herb_here\": false, \"inventory_loot\": 2, \"last_events\": [\"Hit Wolf (-0.10 hp).\", \"Defeated Wolf.\", \"Hit Wolf (0.45 hp).\", \"Hit Wolf (-0.10 hp).\", \"Defeated Wolf.\"], \"monsters_alive\": 2, \"nearest_wolf\": {\"name\": \"Wolf\", \"x\": 6, \"y\": 4}, \"npc_here\": false, \"npc_pos\": {\"x\": 10, \"y\": 6}, \"player\": {\"hp\": 0.68, \"x\": 6, \"y\": 3}, \"quest_complete\": false, \"quest_kills\": 2, \"quest_kills_needed\": 3, \"quest_log_open\": false, \"quest_text\": null, \"steps\": 14}"
+MESSAGE assistant "attack"
