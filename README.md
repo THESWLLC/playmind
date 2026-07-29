@@ -77,10 +77,15 @@ Full flows: [docs/QUICKSTART_V2.md](docs/QUICKSTART_V2.md)
 
 ### Local next steps (your PC)
 
-1. Set `capture.window_title` and ROIs for your game  
-2. Dry-run with `learning_v2.enabled=true` / `policy_mode=scripted`  
-3. Record demos in owned GUI → train BC → set `bc_checkpoint`  
-4. Only then enable `--live` keyboard  
+Cloud agents cannot see your game. On the machine that runs it:
+
+```bash
+python3 scripts/setup_owned_game.py --window-title "YourGameTitle"
+python3 scripts/smoke_local_pipeline.py --device cpu   # optional synthetic smoke
+```
+
+Then calibrate ROIs, record **real** demos, re-train, dry-run, and only then `--live`.  
+Full checklist: [docs/LOCAL_NEXT_STEPS.md](docs/LOCAL_NEXT_STEPS.md)  
 
 ## Other features
 
@@ -101,7 +106,7 @@ python3 -m playmind --ollama --ollama-model playmind-planner --episodes 1
 
 ## Docs
 
-- [QUICKSTART_V2](docs/QUICKSTART_V2.md) · [LEARNING_ARCHITECTURE_V2](docs/LEARNING_ARCHITECTURE_V2.md) · [RECURRENT_POLICY](docs/RECURRENT_POLICY.md)
+- [LOCAL_NEXT_STEPS](docs/LOCAL_NEXT_STEPS.md) · [QUICKSTART_V2](docs/QUICKSTART_V2.md) · [LEARNING_ARCHITECTURE_V2](docs/LEARNING_ARCHITECTURE_V2.md) · [RECURRENT_POLICY](docs/RECURRENT_POLICY.md)
 - [SKILL_COMMITMENT](docs/SKILL_COMMITMENT.md) · [EPISODE_LIFECYCLE](docs/EPISODE_LIFECYCLE.md) · [FEATURE_SCHEMA](docs/FEATURE_SCHEMA.md)
 - [DEMONSTRATION_RECORDING](docs/DEMONSTRATION_RECORDING.md) · [TRAINING](docs/TRAINING.md) · [EVALUATION](docs/EVALUATION.md)
 - [SENSOR_LABELING](docs/SENSOR_LABELING.md) · [MIGRATION](docs/MIGRATION.md)
