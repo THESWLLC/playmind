@@ -34,7 +34,11 @@ Modes:
 - `legacy_q` — experimental raw tabular Q bridge
 - `behavior_clone` — BC primary (same fallbacks as hybrid if checkpoint missing/low-confidence)
 
-Set `"bc_checkpoint": "models/checkpoints/recurrent_skill_policy.json"` after training to use the recurrent policy. Legacy MLP checkpoints remain loadable explicitly.
+Set `"bc_checkpoint": "models/checkpoints/recurrent_skill_policy_v2.json"` after training to use the recurrent policy. Legacy MLP checkpoints remain loadable explicitly.
+
+Also see [LOCAL_NEXT_STEPS](./LOCAL_NEXT_STEPS.md) for the game-PC calibration checklist.
+
+Also see [LOCAL_NEXT_STEPS](./LOCAL_NEXT_STEPS.md) for the game-PC calibration checklist.
 
 Validate settings:
 
@@ -110,7 +114,7 @@ PYTHONPATH=. python3 scripts/train_behavior_clone.py --dry-validate-only \
 PYTHONPATH=. python3 scripts/train_behavior_clone.py \
   --data-dir data/playmind/demonstrations \
   --history-length 16 --batch-size 32 --epochs 30 \
-  --checkpoint models/checkpoints/recurrent_skill_policy.json
+  --checkpoint models/checkpoints/recurrent_skill_policy_v2.json
 ```
 
 Details: [TRAINING.md](./TRAINING.md)
@@ -121,14 +125,14 @@ Details: [TRAINING.md](./TRAINING.md)
 # Sequence-aware held-out evaluation
 PYTHONPATH=. python3 scripts/evaluate_behavior_clone.py \
   --data-dir data/playmind/demonstrations \
-  --checkpoint models/checkpoints/recurrent_skill_policy.json \
+  --checkpoint models/checkpoints/recurrent_skill_policy_v2.json \
   --history-length 16 --split test \
   --json-out data/playmind/evaluation/recurrent-test.json
 
 # Baselines + evidence-separated comparative report
 PYTHONPATH=. python3 scripts/run_evaluation.py \
   --data-dir data/playmind/demonstrations \
-  --checkpoints models/checkpoints/recurrent_skill_policy.json \
+  --checkpoints models/checkpoints/recurrent_skill_policy_v2.json \
   --output-dir data/playmind/evaluation/recurrent-comparison
 ```
 
