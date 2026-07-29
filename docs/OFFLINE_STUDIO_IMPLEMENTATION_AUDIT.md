@@ -3,6 +3,8 @@
 **Date:** 2026-07-29  
 **Branch:** `cursor/offline-studio-milestone-3737`  
 **Baseline:** `main` @ PR #10 (170 tests)
+**Current verification:** 190 tests passed; Studio startup dry-run passed with
+FFmpeg/ffprobe available on the verification host.
 
 Verified against source; not docs alone.
 
@@ -13,37 +15,48 @@ Verified against source; not docs alone.
 | Feature | Status | Notes |
 |---------|--------|-------|
 | Planner V2 / modes / registry / QLoRA / DPO | **Existing and usable** | Extend; do not rebuild |
-| Owned GUI + learning_proof foundation | **Existing but incomplete** | Eval path/schema mismatch; smoke not prominently labeled |
-| Evaluation report writer | **Existing and usable** | Writes `data/playmind/planner/evaluation/planner_benchmark_*.{json,csv,md}` |
-| GUI eval discovery | **Existing but incomplete** | Looks for `report.json` under wrong dirs; expects `comparisons` not `backends` |
+| Owned GUI + learning_proof foundation | **Existing and newly integrated** | Now consumes canonical evaluation index and rejects smoke as proof |
+| Evaluation report writer | **Existing and newly extended** | Writes timestamped files, canonical run report, normalized comparisons, and index |
+| Evaluation discovery/index | **Newly implemented and unit-tested** | Writes canonical run reports, normalizes `backends` to `comparisons`, and feeds both GUIs |
 | Human input capture | **Existing but incomplete** | Global pynput listeners; no focus gate by default |
 | Sensor frame review script | **Existing but incomplete** | Image-only; not Studio video timeline |
 | Vision/OCR on still images | **Existing and usable** | `vision.read_frame` offline-capable |
-| Video import / FFmpeg pipeline | **Missing** | Newly implemented |
-| PlayMind Studio entrypoint (no actuators) | **Missing** | Newly implemented |
-| `retail_wow_offline_only` profile | **Missing** | Newly implemented |
-| Provenance / permission tracking | **Missing** | Newly implemented |
-| Timeline annotation UI | **Missing** | Newly implemented |
-| Transcript-assisted suggestions | **Missing** | Newly implemented (optional/local) |
-| Real frozen benchmark builder | **Missing** | Synthetic suite exists only |
-| Training readiness gate UI/CLI | **Missing** | Newly implemented |
-| Correction-driven learning loop | **Existing but incomplete** | Validator correction prompt unused |
-| Registry `live_use_prohibited` | **Missing** | Newly implemented |
-| Smoke artifact prominent labeling | **Existing but incomplete** | Manifest has smoke; GUI weak |
-| Studio Windows launcher | **Missing** | Newly implemented |
-| Docs recommending Studio offline workflow | **Existing but incomplete** | README warns vs WoW; no Studio START_HERE |
+| Video import / FFmpeg pipeline | **Newly implemented and core-tested** | Probe/hash/copy/reference/extraction implemented; codec matrix not integration-tested |
+| PlayMind Studio backend coordinator (no actuators) | **Newly implemented and safety-tested** | `StudioApp` plus local GUI/CLI entrypoint; no actuator imports |
+| `retail_wow_offline_only` profile | **Newly implemented and unit-tested** | All live/input/process capabilities prohibited |
+| Provenance / permission tracking | **Newly implemented and unit-tested** | Conservative code gate; operator statements are not legal proof |
+| Timeline annotation storage/review | **Newly implemented and unit-tested** | Browser time-range review + focus-gated hotkeys; no video playback timeline |
+| Transcript-assisted suggestions | **Newly implemented (mock/rule-based)** | Local SRT/VTT/TXT keyword suggestions; no ASR; always review-required |
+| Real frozen benchmark builder | **Newly implemented and unit-tested** | Versioned immutable envelope; evaluator still requires explicit JSONL conversion |
+| Training readiness | **Newly implemented and unit-tested** | Smoke/experimental/normal backend with Studio view/API |
+| Correction-driven learning records/export | **Newly implemented and unit-tested** | JSON correction editor/review and SFT/preference rows; automatic candidate generation and SFT→DPO chaining missing |
+| Registry `live_use_prohibited` / smoke restrictions | **Newly implemented and unit-tested** | Hard-blocks promotion/use; Studio provenance is not automatically propagated by trainer registration |
+| Smoke artifact prominent labeling | **Newly implemented** | Both GUIs, manifest/artifact/registry, and docs identify `SMOKE / NO REAL WEIGHTS TRAINED` |
+| Studio Windows launcher | **Newly implemented** | Separate setup/PowerShell/BAT launcher on port 8787 |
+| Studio GUI | **Newly implemented** | Local dashboard/wizard and workflow tabs; path-form UI, no video playback timeline |
+| Docs recommending Studio offline workflow | **Newly implemented** | README, `START_HERE.md`, and focused Studio guides |
 | Auto Twitch/YouTube scrape | **Deferred** | Out of scope / permission risk |
 | Cloud ASR transcription required | **Deferred** | Optional local/import only |
 | Real 3B QLoRA on this CI host | **Mock/synthetic only** | No GPU; smoke + presets remain |
 
 ---
 
-## Critical bugs to fix
+## Critical findings after implementation
 
-1. **Eval discovery mismatch** — GUI never finds planner benchmark reports.  
-2. **Schema mismatch** — GUI expects `comparisons`; evaluator emits `backends`.  
-3. **Smoke as ordinary candidate** — need `SMOKE / NO REAL WEIGHTS` labeling.  
-4. **Startup ambiguity** — `start_playmind.bat` opens owned-game lab, not offline Studio.
+1. **Resolved:** evaluator writes canonical run reports, `comparisons`, and
+   `index.json`; both GUIs consume the normalized latest report.
+2. **Resolved in registry:** smoke artifacts and live-use-prohibited artifacts
+   cannot be promoted, including by manual override.
+3. **Open integration gap:** normal Studio-derived SFT training does not
+   automatically copy protected profile/provenance into registry
+   `live_use_prohibited` fields.
+4. **Open input mismatch:** benchmark builder freezes a JSON envelope while
+   evaluation `--suite` consumes JSONL; documentation provides conversion.
+5. **Resolved:** separate Studio and owned-game launchers are labeled and use
+   ports 8787 and 8777 respectively.
+6. **Open UI mismatch:** Studio Analysis offers `uniform` and `scene_change`,
+   while the backend accepts `overview`, `change_aware`, `keyframes`, and
+   `manual`; the two extra UI selections currently error.
 
 ---
 
@@ -56,12 +69,16 @@ Verified against source; not docs alone.
 
 ---
 
-## Implementation order
+## Implementation record
 
-1. This audit  
-2. Studio safety + video import + provenance + project store  
-3. Offline analysis + annotation store + transcripts  
-4. Dataset ingestion from Studio + real benchmark builder  
-5. Eval index fix + training readiness + correction loop + registry restrictions  
-6. Studio GUI + wizard + startup  
-7. Tests + docs + START_HERE.md
+1. **Done:** audit, Studio safety/profile, video import, provenance, project
+   store, extraction, offline analysis, annotation store, and transcripts.
+2. **Done:** Studio dataset bridge, real benchmark builder, evaluation index,
+   readiness backend, correction records, and registry restrictions.
+3. **Done:** separate Studio GUI/wizard/dashboard, CLI and Windows launchers,
+   owned-GUI evaluation discovery, smoke labeling, core tests, and Studio
+   documentation/`START_HERE.md`.
+4. **Deferred/not done:** playable video timeline, structured benchmark editor,
+   automatic protected-lineage registry propagation, one-command
+   benchmark-to-evaluator bridge, local ASR, UI extraction-name alignment, and
+   real GPU validation.

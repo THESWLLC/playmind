@@ -104,12 +104,109 @@ larger frozen held-out `--suite`. Also verify the candidate registry backend is
 the actual deployed model: the evaluator does not load `adapter_path`
 directly.
 
-## GUI has no latest planner report
+## Studio does not start
 
-The planner benchmark writes timestamped files under
-`data/playmind/planner/evaluation/`. The current GUI latest-report adapter looks
-for `report.json` in different directories, so open the generated
-`planner_benchmark_*.md` or JSON directly.
+Run the startup-only validation:
+
+```bash
+python scripts/start_studio.py --dry-run
+```
+
+Verified launcher flags are `--host`, `--port`, `--config`, `--no-browser`,
+and `--dry-run`; the default is `127.0.0.1:8787`. On Windows:
+
+```powershell
+.\setup_playmind_studio.ps1
+.\start_playmind_studio.bat -Port 8788 -NoBrowser
+```
+
+Use `-Config path\to\studio.json` for a custom Studio config. If port 8787 is
+busy, select another port. Do not run `start_playmind.bat` as a substitute: it
+opens the separate owned-game lab and is not permitted for retail WoW.
+
+## FFmpeg or ffprobe is missing
+
+Symptoms include `MediaToolUnavailableError`, “ffmpeg was not found,” or
+“ffprobe was not found.”
+
+```powershell
+winget install Gyan.FFmpeg
+ffmpeg -version
+ffprobe -version
+```
+
+```bash
+# Debian/Ubuntu/WSL
+sudo apt update && sudo apt install -y ffmpeg
+ffmpeg -version
+ffprobe -version
+```
+
+Open a new terminal after installation so `PATH` refreshes. Both executables
+are required: `ffprobe` inspects/hashes metadata before project creation and
+`ffmpeg` extracts frames.
+
+## Video import or extraction fails
+
+- Supported extensions are `.mp4`, `.mkv`, `.mov`, `.avi`, and `.webm`.
+- Renaming an unsupported/corrupt file does not convert it; inspect or remux it
+  with FFmpeg.
+- “media has no video stream” means ffprobe found no video stream.
+- Reference-mode projects fail after the original is moved/deleted; restore it
+  or import again.
+- `change_aware` is currently a denser uniform-sampling stub, not a visual
+  change detector.
+- Keyframe manifests currently have `timestamp: null`; use overview/manual
+  extraction when exact timestamps are needed.
+
+Run the media status check:
+
+```bash
+python - <<'PY'
+from playmind.studio.media_probe import media_tools_status
+print(media_tools_status())
+PY
+```
+
+## No latest planner evaluation appears
+
+The evaluator now writes timestamped JSON/CSV/Markdown, a canonical
+`data/playmind/planner/evaluation/runs/<run-id>/report.json`, and a normalized
+`index.json`. Rebuild discovery with:
+
+```bash
+python - <<'PY'
+import json
+from playmind.studio.eval_index import write_index
+print(json.dumps(write_index(), indent=2))
+PY
+```
+
+Both the Studio and owned-game dashboards now use the canonical discovery
+adapter. If a dashboard still shows no report, open `index.json` or generated
+Markdown directly and restart/refresh the GUI. Malformed JSON is skipped.
+
+The real benchmark builder writes a JSON envelope, while
+`evaluate_planner.py --suite` currently expects one scenario object per JSONL
+line. Follow the conversion step in
+[REAL_BENCHMARK_BUILDER](./REAL_BENCHMARK_BUILDER.md); passing the pretty
+`*_v1.json` envelope directly causes a JSON parsing/schema failure.
+
+## A smoke run looks like a trained model
+
+Planner SFT/DPO `--smoke` and `--dry-run` ignore real training files and write
+synthetic placeholders. Confirm:
+
+```text
+training_manifest.json: "smoke": true
+adapter/smoke_artifact.json
+registry: smoke=true, allowed_uses=["smoke_validation"]
+```
+
+Label the result **SMOKE / NO REAL WEIGHTS**. It proves command, artifact,
+manifest, and registry plumbing only. It cannot be used or promoted; registry
+promotion rejects smoke artifacts even with manual override. Use a different
+run ID for real training.
 
 ## Port 8777 is busy
 
