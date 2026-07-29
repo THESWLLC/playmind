@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Iterable, Mapping, Sequence
 
-from playmind.events import Event, EventType
+from playmind.events import Event, EventType, kill_evidence_classes
 
 # Phase 11 default magnitudes (full-confidence).
 DEFAULT_REWARDS: dict[str, float] = {
@@ -17,6 +17,10 @@ DEFAULT_REWARDS: dict[str, float] = {
     "unrecoverable_stuck": -2.0,
     "death": -5.0,
     "time_per_second": -0.01,
+}
+
+DEFAULT_THRESHOLDS: dict[str, float] = {
+    "kill_confirmed": 0.7,
 }
 
 # Events that must not drive high-level reward when speculative.
@@ -70,6 +74,7 @@ def reward_from_events(
     dt: float,
     *,
     values: Mapping[str, float] | None = None,
+    thresholds: Mapping[str, float] | None = None,
     unrecoverable_stuck: bool = False,
 ) -> RewardBreakdown:
     """Map confirmed events (+ elapsed time) to a logged reward breakdown.
@@ -78,6 +83,7 @@ def reward_from_events(
     rewards derived from confirmed events (and the time cost).
     """
     table = {**DEFAULT_REWARDS, **(dict(values) if values else {})}
+    threshold_table = {**DEFAULT_THRESHOLDS, **(dict(thresholds) if thresholds else {})}
     breakdown = RewardBreakdown()
 
     # Time cost always applies.
@@ -100,8 +106,11 @@ def reward_from_events(
                 event=name,
             )
         elif et is EventType.KILL_CONFIRMED:
-            # Guard: refuse reward if only a single weak evidence piece slipped through.
-            if len(evidence) < 2:
+            if conf < threshold_table["kill_confirmed"]:
+                breakdown.skipped.append("kill_below_confidence_threshold")
+                continue
+            if not kill_evidence_classes(evidence):
+                breakdown.skipped.append("kill_missing_orthogonal_evidence")
                 breakdown.skipped.append("kill_insufficient_evidence")
                 continue
             breakdown.add(
@@ -115,13 +124,13 @@ def reward_from_events(
                 _scaled(table["objective_progressed"], conf),
                 event=name,
             )
-        elif et is EventType.SKILL_SUCCEEDED:
+        elif et in {EventType.SKILL_SUCCESS, EventType.SKILL_SUCCEEDED}:
             breakdown.add(
                 "skill_succeeded",
                 _scaled(table["skill_succeeded"], conf),
                 event=name,
             )
-        elif et is EventType.SKILL_FAILED:
+        elif et in {EventType.SKILL_FAILURE, EventType.SKILL_FAILED}:
             if "timeout" in evidence or (ev.payload or {}).get("reason") == "timeout":
                 breakdown.add(
                     "skill_timeout",

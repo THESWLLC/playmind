@@ -11,6 +11,8 @@ from typing import Any, Literal
 
 SCHEMA_VERSION = 1
 
+EpisodeKind = Literal["gameplay", "recovery", "other"]
+
 StartReason = Literal[
     "new_run",
     "controllable",
@@ -23,6 +25,8 @@ StartReason = Literal[
 EndReason = Literal[
     "death",
     "goal_complete",
+    "recovery_complete",
+    "recovery_failed",
     "session_end",
     "logout",
     "loading_timeout",
@@ -40,6 +44,7 @@ class EpisodeRecord:
 
     episode_id: str
     start_reason: str
+    episode_kind: EpisodeKind = "gameplay"
     end_reason: str | None = None
     terminal: bool = False
     truncated: bool = False
@@ -57,6 +62,14 @@ class EpisodeRecord:
     ended_at: float | None = None
     steps: int = 0
     done: bool = False  # True only after end/truncate — never always False by design
+    previous_episode_id: str | None = None
+    death_event_id: str | None = None
+    recovery_segment_id: str | None = None
+    resurrection_ts: float | None = None
+    controllable_ts: float | None = None
+    time_death_to_rez: float | None = None
+    time_rez_to_controllable: float | None = None
+    recovery_result: str | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
@@ -64,7 +77,9 @@ class EpisodeRecord:
 
 
 # Terminal end reasons (episode truly finished, not just cut short).
-_TERMINAL_REASONS = frozenset({"death", "goal_complete", "logout", "session_end"})
+_TERMINAL_REASONS = frozenset(
+    {"death", "goal_complete", "recovery_complete", "recovery_failed", "logout", "session_end"}
+)
 _TRUNCATE_REASONS = frozenset(
     {"loading_timeout", "manual_reset", "sensor_failure", "max_duration", "truncated"}
 )
@@ -88,6 +103,7 @@ class EpisodeManager:
         self.configuration_version = configuration_version
         self.max_duration_s = max_duration_s
         self.current: EpisodeRecord | None = None
+        self._pending_skill_attempts = 0
         self._path = self.persist_dir / "episodes.jsonl"
 
     @property
@@ -102,6 +118,10 @@ class EpisodeManager:
         reason: StartReason | str = "new_run",
         *,
         episode_id: str | None = None,
+        episode_kind: EpisodeKind = "gameplay",
+        previous_episode_id: str | None = None,
+        death_event_id: str | None = None,
+        recovery_segment_id: str | None = None,
         metadata: dict[str, Any] | None = None,
     ) -> EpisodeRecord:
         if self.current is not None and not self.current.done:
@@ -110,12 +130,17 @@ class EpisodeManager:
         ep = EpisodeRecord(
             episode_id=episode_id or str(uuid.uuid4()),
             start_reason=str(reason),
+            episode_kind=episode_kind,
             model_version=self.model_version,
             configuration_version=self.configuration_version,
+            previous_episode_id=previous_episode_id,
+            death_event_id=death_event_id,
+            recovery_segment_id=recovery_segment_id,
             metadata=dict(metadata or {}),
             done=False,
         )
         self.current = ep
+        self._pending_skill_attempts = 0
         return ep
 
     def note_reward(self, reward: float) -> None:
@@ -127,14 +152,40 @@ class EpisodeManager:
         if self.max_duration_s is not None and self.current.duration_s >= self.max_duration_s:
             self.truncate("max_duration")
 
-    def note_skill_attempt(self, *, success: bool | None = None) -> None:
+    def note_skill_start(self) -> None:
+        """Record one skill invocation, independently of its eventual outcome."""
         if self.current is None or self.current.done:
             return
         self.current.skill_attempts += 1
+        self._pending_skill_attempts += 1
+
+    def note_skill_outcome(self, success: bool) -> None:
+        """Record an outcome without counting a second attempt."""
+        if self.current is None or self.current.done:
+            return
         if success is True:
             self.current.skill_successes += 1
-        elif success is False:
+        else:
             self.current.skill_failures += 1
+        if self._pending_skill_attempts > 0:
+            self._pending_skill_attempts -= 1
+
+    def note_skill_attempt(self, *, success: bool | None = None) -> None:
+        """Backward-compatible skill accounting.
+
+        Prefer ``note_skill_start()`` followed by ``note_skill_outcome()``.
+        When an outcome is supplied, it is paired with a pending start. If no
+        start is pending, this method preserves the legacy combined
+        attempt-and-outcome behavior.
+        """
+        if self.current is None or self.current.done:
+            return
+        if success is None:
+            self.note_skill_start()
+            return
+        if self._pending_skill_attempts <= 0:
+            self.note_skill_start()
+        self.note_skill_outcome(success)
 
     def note_goal_progress(self, progress: float) -> None:
         if self.current is None or self.current.done:
@@ -150,9 +201,19 @@ class EpisodeManager:
         """Heuristic terminal detection from an observation dict."""
         if not obs:
             return None
-        if obs.get("is_dead") or str(obs.get("life_phase") or "") in {
+        phase = str(obs.get("life_phase") or "").lower()
+        # Loading and ghost/runback are recovery states, not fresh deaths.
+        if (
+            obs.get("loading")
+            or phase == "loading"
+            or obs.get("is_ghost")
+            or phase in {"ghost", "runback", "resurrection_pending", "alive_not_controllable"}
+        ):
+            return None
+        if obs.get("is_dead") or phase in {
             "dead_dialog",
             "confirm",
+            "release_confirm",
             "rez_picker",
         }:
             # Only end when transitioning into death is handled by caller;
@@ -160,9 +221,11 @@ class EpisodeManager:
             return "death"
         if obs.get("goal_complete") or obs.get("objective_completed"):
             return "goal_complete"
-        if obs.get("logout") or obs.get("session_end"):
+        if obs.get("session_end"):
+            return "session_end"
+        if obs.get("logout"):
             return "logout"
-        if obs.get("sensor_failure"):
+        if obs.get("sensor_failure") or obs.get("fatal_sensor"):
             return "sensor_failure"
         return None
 
