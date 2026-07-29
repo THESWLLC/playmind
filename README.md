@@ -24,10 +24,21 @@ Or the package CLI:
 python3 -m playmind --episodes 5
 ```
 
-Teach mode (agent asks you when unsure):
+### Teach / vision / actuators / training
 
 ```bash
-python3 -m playmind --teach --interactive --episodes 1
+# A) Teach mode — agent asks you while playing
+python3 -m playmind --teach --episodes 1
+
+# C) Vision path (demo ASCII frames + quest text parse)
+python3 -m playmind --vision --episodes 3
+
+# B/D) Keyboard actuator stubs (no OS key injection by default)
+python3 -m playmind --actuator dry-run --episodes 1
+
+# E) Self-play to grow learning data + fine-tune export
+PYTHONPATH=. python3 scripts/self_play_train.py --episodes 50
+PYTHONPATH=. python3 scripts/finetune_export_check.py
 ```
 
 Optional local LLM planner (requires [Ollama](https://ollama.com)):
@@ -36,6 +47,8 @@ Optional local LLM planner (requires [Ollama](https://ollama.com)):
 ollama pull dolphin-llama3
 python3 -m playmind --ollama --episodes 1 --interactive
 ```
+
+More detail: [docs/NEXT_STACK.md](docs/NEXT_STACK.md)
 
 ## What gets saved
 
@@ -67,10 +80,11 @@ Details: [docs/GITHUB_SETUP.md](docs/GITHUB_SETUP.md)
 
 ## Roadmap
 
-1. Demo world + self-learning + teach mode *(this repo)*
-2. Window capture + OCR/CV adapters
-3. Parsec/keyboard actuator for **your** game
-4. Fine-tune local LLM on `finetune.jsonl`
+1. ~~Demo world + self-learning + teach mode~~
+2. ~~Vision frame path + actuator stubs + fine-tune export~~
+3. Real window capture + OCR on **your** game screenshots
+4. Enable Parsec/keyboard backend for **your** game only
+5. Fine-tune local LLM on `finetune.jsonl`
 
 ## License
 
