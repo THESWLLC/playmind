@@ -24,9 +24,11 @@ In `config/owned_game.json`:
 
 Modes:
 - `scripted` — deterministic skills only
-- `hybrid` — emergencies + scripted (BC stub falls back until a checkpoint exists)
+- `hybrid` — emergencies scripted; loads `bc_checkpoint` when set; else scripted fallback
 - `legacy_q` — experimental raw tabular Q bridge
-- `behavior_clone` — BC primary (falls back like hybrid until a real checkpoint loads)
+- `behavior_clone` — BC primary (same fallbacks as hybrid if checkpoint missing/low-confidence)
+
+Set `"bc_checkpoint": "models/checkpoints/skill_policy_v2.json"` after training to use the MLP.
 
 Validate settings:
 

@@ -1,7 +1,9 @@
 # Learning Architecture V2
 
-**Status:** Implementation in progress  
-**Branch intent:** Replace primary coarse tabular Q-learning with hierarchical, temporally aware skill learning while keeping legacy Q as fallback.
+**Status:** Implemented on `main` (PR #4 + PR #5)  
+**Intent:** Replace primary coarse tabular Q-learning with hierarchical, temporally aware skill learning while keeping legacy Q as fallback.
+
+**Still local / ops (not missing code):** calibrate your game window/ROIs; record demos; train a BC checkpoint before hybrid beats scripted.
 
 ---
 
@@ -142,16 +144,19 @@ Replay env evaluates offline without sending keys.
 - [x] `playmind/history.py`
 - [x] `playmind/skills/` + runtime
 - [x] `playmind/action_masking.py`
-- [x] `playmind/policies/` (scripted, legacy, hybrid, BC stub)
+- [x] `playmind/policies/` (scripted, legacy, hybrid, BC / SkillPolicyV2)
 - [x] `playmind/episodes.py`
 - [x] `playmind/events.py` + `rewards_v2.py`
 - [x] `playmind/learning_v2_controller.py` + `owned_loop` config gate
+- [x] `playmind/models/policy_v2.py` + BC train/eval scripts
+- [x] Sensor metrics + `scripts/review_sensor_frames.py`
+- [x] Owned GUI V2 (policy mode, demos, episode reset, diagnostics)
 - [x] Tests for new modules
 - [x] `playmind/config_v2.py` (validated settings)
 - [x] `playmind/migration.py` + `scripts/migrate_legacy_learning.py`
 - [x] `playmind/diagnostics.py` + `scripts/export_diagnostics.py`
 - [x] Docs: QUICKSTART_V2, DEMONSTRATION_RECORDING, TRAINING, EVALUATION, SENSOR_LABELING, SKILLS, MIGRATION
-- [ ] GUI tabs / richer sensor labeling UI (follow-on)
+- [ ] Richer multi-tab GUI / heavier sensor labeling product polish (follow-on)
 
 Enable via `learning_v2.enabled` in `owned_game.json` — see [QUICKSTART_V2.md](./QUICKSTART_V2.md).
 
