@@ -61,7 +61,7 @@ ollama create playmind-planner -f models/Modelfile.playmind
 python3 -m playmind --ollama --ollama-model playmind-planner --episodes 1
 ```
 
-Docs: [docs/FULL_STACK.md](docs/FULL_STACK.md) · [docs/NEXT_STACK.md](docs/NEXT_STACK.md) · [docs/QUICKSTART_V2.md](docs/QUICKSTART_V2.md) · [docs/LEARNING_ARCHITECTURE_V2.md](docs/LEARNING_ARCHITECTURE_V2.md)
+Docs: [docs/FULL_STACK.md](docs/FULL_STACK.md) · [docs/NEXT_STACK.md](docs/NEXT_STACK.md) · [docs/QUICKSTART_V2.md](docs/QUICKSTART_V2.md) · [docs/LEARNING_ARCHITECTURE_V2.md](docs/LEARNING_ARCHITECTURE_V2.md) · [docs/DEMONSTRATION_RECORDING.md](docs/DEMONSTRATION_RECORDING.md) · [docs/TRAINING.md](docs/TRAINING.md) · [docs/EVALUATION.md](docs/EVALUATION.md) · [docs/SENSOR_LABELING.md](docs/SENSOR_LABELING.md) · [docs/SKILLS.md](docs/SKILLS.md) · [docs/MIGRATION.md](docs/MIGRATION.md)
 
 ## Learning V2 (skills / hybrid)
 
@@ -71,7 +71,30 @@ Default path can use hierarchical skills instead of raw tabular Q:
 "learning_v2": { "enabled": true, "policy_mode": "hybrid" }
 ```
 
-See [docs/QUICKSTART_V2.md](docs/QUICKSTART_V2.md). Legacy Q remains as an optional fallback.
+See [docs/QUICKSTART_V2.md](docs/QUICKSTART_V2.md) for the eight flows (scripted, demos, review, train, eval, hybrid, legacy, diagnostics). Legacy Q remains as an optional fallback.
+
+```bash
+# 1) Scripted
+# config: learning_v2.policy_mode=scripted
+PYTHONPATH=. python3 scripts/run_owned_loop.py --config config/owned_game.json --max-ticks 30
+
+# 2–3) Record + review demos — docs/DEMONSTRATION_RECORDING.md
+PYTHONPATH=. python3 scripts/train_behavior_clone.py --dry-validate-only
+
+# 4) Train BC
+PYTHONPATH=. python3 scripts/train_behavior_clone.py --checkpoint models/checkpoints/skill_policy_v2.json
+
+# 5) Eval / replay — docs/EVALUATION.md
+
+# 6) Hybrid (default when enabled)
+PYTHONPATH=. python3 scripts/run_owned_loop.py --config config/owned_game.json --max-ticks 30
+
+# 7) Legacy migrate + policy_mode=legacy_q
+PYTHONPATH=. python3 scripts/migrate_legacy_learning.py --data-dir data/playmind/owned
+
+# 8) Diagnostics bundle
+PYTHONPATH=. python3 scripts/export_diagnostics.py
+```
 
 ## Safety defaults
 

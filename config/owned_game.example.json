@@ -28,6 +28,22 @@
     "confidence_threshold": 0.45,
     "bc_checkpoint": null,
     "use_rewards_v2": true,
-    "track_episodes": true
+    "track_episodes": true,
+    "device": "cpu",
+    "seed": 0,
+    "episode_limits": {
+      "max_steps": 10000,
+      "max_seconds": 3600,
+      "max_deaths": 50
+    },
+    "demonstration": {
+      "enabled": false,
+      "root": "data/playmind/demonstrations",
+      "save_frames": true
+    },
+    "evaluation": {
+      "enabled": false,
+      "report_dir": "data/playmind/eval"
+    }
   }
 }
