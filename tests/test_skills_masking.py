@@ -238,6 +238,20 @@ def test_mask_skills_by_life_state() -> None:
     assert "death_recovery" not in masked_g
 
 
+def test_none_stuck_hint_does_not_enable_unstuck() -> None:
+    masked = mask_skills(_alive_obs(stuck_hint="none", stagnant=0), list_skills())
+    assert "unstuck" not in masked
+
+
+def test_blocking_modal_is_masked_like_modal_menu() -> None:
+    obs = _alive_obs(blocking_modal=True, modal_menu=False)
+    masked = mask_skills(obs, list_skills())
+    assert "clear_modal" in masked
+    assert set(masked).issubset({"clear_modal", "wait"})
+    ok, reason = validate_action(obs, "key:esc")
+    assert ok, reason
+
+
 def test_runtime_interrupt_on_death() -> None:
     rt = SkillRuntime()
     ctx = SkillContext(obs=_alive_obs(has_target=False), now=0.0, tick=1)

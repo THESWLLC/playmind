@@ -578,23 +578,25 @@ class OwnedGameLoop:
                         next_obs["hostiles_near"] = True
                     if detect_blocking_modal(next_obs):
                         next_obs["modal_menu"] = True
+                    # Sticky life state and V2 episode bookkeeping are runtime
+                    # concerns, not optional Q-learning work.
+                    self._life.update(next_obs)
+                    next_obs = self._life.patch_obs(next_obs)
                     if self.cfg.learn:
-                        # Sticky phase on aftermath so rewards see UI progress.
-                        self._life.update(next_obs)
-                        next_obs = self._life.patch_obs(next_obs)
                         reward = reward_owned(obs, action, next_obs)
                         goal = self._goal or parse_directive(self.directive)
                         reward += directive_reward_bonus(goal, obs, action, next_obs)
                         reward += self._progress.reward_bonus(obs, action, next_obs)
-                        if self._v2 is not None and self._v2.cfg.enabled:
-                            reward = self._v2.note_transition(
-                                obs,
-                                action,
-                                action,
-                                next_obs,
-                                dt=float(self.cfg.tick_seconds),
-                                legacy_reward=reward,
-                            )
+                    if self._v2 is not None and self._v2.cfg.enabled:
+                        reward = self._v2.note_transition(
+                            obs,
+                            action,
+                            action,
+                            next_obs,
+                            dt=float(self.cfg.tick_seconds),
+                            legacy_reward=reward,
+                        )
+                    if self.cfg.learn:
                         self._progress.note(obs, action, next_obs, reward)
                         next_obs = self._progress.patch_obs(next_obs)
                         # Death cause → prevention; successful death clicks → pipeline memory.
@@ -771,6 +773,8 @@ class OwnedGameLoop:
                 else:
                     print(status)
         finally:
+            if self._v2 is not None:
+                self._v2.shutdown()
             if self._process is not None:
                 self._process.apply_travel_snapshot(self._travel)
                 self._process.save()

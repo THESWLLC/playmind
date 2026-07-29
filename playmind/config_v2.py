@@ -113,6 +113,10 @@ class LearningV2Settings:
     confidence_threshold: float = 0.45
     use_rewards_v2: bool = True
     track_episodes: bool = True
+    commitment_confidence_margin: float = 0.15
+    minimum_commitment_seconds: float = 0.4
+    maximum_commitment_seconds: float = 25.0
+    controllable_frames: int = 3
 
     skill_timeouts: dict[str, float] = field(
         default_factory=lambda: dict(DEFAULT_SKILL_TIMEOUTS)
@@ -152,6 +156,27 @@ class LearningV2Settings:
         if conf < 0.0 or conf > 1.0:
             errors.append(
                 f"confidence_threshold must be in [0, 1], got {self.confidence_threshold!r}"
+            )
+        margin = float(self.commitment_confidence_margin)
+        if margin < 0.0 or margin > 1.0:
+            errors.append(
+                "commitment_confidence_margin must be in [0, 1], "
+                f"got {self.commitment_confidence_margin!r}"
+            )
+        minimum = float(self.minimum_commitment_seconds)
+        maximum = float(self.maximum_commitment_seconds)
+        if minimum < 0.0:
+            errors.append(
+                f"minimum_commitment_seconds must be >= 0, got {minimum}"
+            )
+        if maximum <= 0.0 or maximum < minimum:
+            errors.append(
+                "maximum_commitment_seconds must be > 0 and >= "
+                f"minimum_commitment_seconds, got {maximum}"
+            )
+        if int(self.controllable_frames) < 1:
+            errors.append(
+                f"controllable_frames must be >= 1, got {self.controllable_frames!r}"
             )
 
         device = str(self.device or "").strip().lower()
@@ -336,6 +361,19 @@ class LearningV2Settings:
             ),
             use_rewards_v2=bool(raw.get("use_rewards_v2", True)),
             track_episodes=bool(raw.get("track_episodes", True)),
+            commitment_confidence_margin=float(
+                raw.get(
+                    "commitment_confidence_margin",
+                    raw.get("commitment_margin", 0.15),
+                )
+            ),
+            minimum_commitment_seconds=float(
+                raw.get("minimum_commitment_seconds", 0.4)
+            ),
+            maximum_commitment_seconds=float(
+                raw.get("maximum_commitment_seconds", 25.0)
+            ),
+            controllable_frames=int(raw.get("controllable_frames") or 3),
             skill_timeouts=_merge_float_map(
                 DEFAULT_SKILL_TIMEOUTS, raw.get("skill_timeouts")
             ),

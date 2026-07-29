@@ -4,10 +4,38 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
-from typing import Any, Mapping
+from typing import Any, Literal, Mapping
 
 
-Status = str  # running | success | failed | timeout
+SkillStatus = Literal[
+    "idle",
+    "starting",
+    "running",
+    "success",
+    "failed",
+    "timeout",
+    "cancelled",
+    "blocked",
+]
+# ``Status`` remains ``str`` because external skills historically returned
+# custom status strings.  SkillStatus documents the statuses owned here
+# without making those existing results invalid at runtime.
+Status = str
+SKILL_STATUSES: frozenset[str] = frozenset(
+    {
+        "idle",
+        "starting",
+        "running",
+        "success",
+        "failed",
+        "timeout",
+        "cancelled",
+        "blocked",
+    }
+)
+TERMINAL_STATUSES: frozenset[str] = frozenset(
+    {"success", "failed", "timeout", "cancelled"}
+)
 
 
 @dataclass
@@ -110,6 +138,7 @@ class Skill(ABC):
         self._done: bool = False
         self._failed: bool = False
         self._fail_reason: str = ""
+        self._status: Status = "idle"
 
     def reset(self) -> None:
         self._started_at = None
@@ -118,6 +147,24 @@ class Skill(ABC):
         self._done = False
         self._failed = False
         self._fail_reason = ""
+        self._status = "idle"
+
+    @property
+    def status(self) -> Status:
+        return self._status
+
+    @property
+    def retries_exhausted(self) -> bool:
+        """Whether attempts have moved beyond the configured retry allowance."""
+        return self._retries > max(0, int(self.retry_limit))
+
+    def record_retry(self) -> bool:
+        """Record one retry and return whether the retry limit was exceeded."""
+        self._retries += 1
+        if self.retries_exhausted:
+            self._mark_failed("retry_limit_exceeded")
+            return False
+        return True
 
     def can_start(self, ctx: SkillContext) -> bool:
         return True
@@ -125,9 +172,10 @@ class Skill(ABC):
     def start(self, ctx: SkillContext) -> None:
         self.reset()
         self._started_at = float(ctx.now or 0.0)
+        self._status = "starting"
 
     def is_complete(self, ctx: SkillContext) -> bool:
-        return self._done
+        return self._done or self._status in TERMINAL_STATUSES
 
     def has_failed(self, ctx: SkillContext) -> bool:
         return self._failed
@@ -136,6 +184,7 @@ class Skill(ABC):
         self._failed = True
         self._fail_reason = "cancelled"
         self._done = True
+        self._status = "cancelled"
 
     def timed_out(self, ctx: SkillContext) -> bool:
         if self._started_at is None:
@@ -146,6 +195,7 @@ class Skill(ABC):
     def _mark_success(self, evidence: list[str] | None = None) -> None:
         self._done = True
         self._failed = False
+        self._status = "success"
         if evidence:
             ctx_ev = evidence  # noqa: F841 — kept for callers
 
@@ -153,6 +203,7 @@ class Skill(ABC):
         self._failed = True
         self._done = True
         self._fail_reason = reason
+        self._status = "failed"
 
     def _result(
         self,
@@ -165,12 +216,28 @@ class Skill(ABC):
         timed_out: bool = False,
         **debug: Any,
     ) -> SkillStepResult:
+        failures = list(failure_evidence or [])
+        if status == "blocked":
+            self._retries += 1
+        if self.retries_exhausted and status not in TERMINAL_STATUSES:
+            self._mark_failed("retry_limit_exceeded")
+            status = "failed"
+            reason = f"{reason}:retry_limit_exceeded"
+            failures.append("retry_limit_exceeded")
+        elif status in TERMINAL_STATUSES:
+            self._done = True
+            self._failed = status in {"failed", "timeout", "cancelled"}
+            self._status = status
+            if self._failed and not self._fail_reason:
+                self._fail_reason = reason
+        else:
+            self._status = status
         return SkillStepResult(
             requested_action=action,
             reason=reason,
             status=status,
             success_evidence=list(success_evidence or []),
-            failure_evidence=list(failure_evidence or []),
+            failure_evidence=failures,
             timed_out=timed_out,
             debug=dict(debug),
         )

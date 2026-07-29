@@ -50,6 +50,11 @@ AUX_KEYS = ("target_valid", "combat", "death")
 UNTRAINED_CONFIDENCE = 0.05
 MODEL_VERSION = "skill-policy-v2-mlp-1"
 
+
+class LegacyCheckpointError(ValueError):
+    """Raised when a checkpoint belongs to the other policy architecture."""
+
+
 # life_phase one-hot order for stable feature layout
 _LIFE_PHASES = (
     "alive",
@@ -371,6 +376,7 @@ class SkillPolicyV2:
         self.trained = bool(trained)
         self.config: dict[str, Any] = {
             "model_version": self.model_version,
+            "model_type": "structured_mlp_legacy",
             "skill_names": list(self.skill_names),
             "feature_dim": self.feature_dim,
             "hidden": self.hidden,
@@ -381,6 +387,7 @@ class SkillPolicyV2:
         }
         self.metadata: dict[str, Any] = {
             "model_version": self.model_version,
+            "model_type": "structured_mlp_legacy",
             "skill_names": list(self.skill_names),
             "feature_dim": self.feature_dim,
             "trained": self.trained,
@@ -496,6 +503,7 @@ class SkillPolicyV2:
         if config_snapshot:
             cfg.update(dict(config_snapshot))
         cfg["model_version"] = self.model_version
+        cfg["model_type"] = "structured_mlp_legacy"
         cfg["skill_names"] = list(self.skill_names)
         cfg["feature_dim"] = self.feature_dim
         cfg["hidden"] = self.hidden
@@ -506,6 +514,7 @@ class SkillPolicyV2:
 
         meta: dict[str, Any] = {
             "model_version": self.model_version,
+            "model_type": "structured_mlp_legacy",
             "skill_names": list(self.skill_names),
             "feature_dim": self.feature_dim,
             "hidden": self.hidden,
@@ -556,6 +565,12 @@ class SkillPolicyV2:
         meta_path = path if path.suffix == ".json" else path.with_suffix(".json")
         with meta_path.open("r", encoding="utf-8") as f:
             meta = json.load(f)
+        model_type = str(meta.get("model_type") or (meta.get("config") or {}).get("model_type") or "")
+        if model_type == "recurrent_skill_policy":
+            raise LegacyCheckpointError(
+                "This is a recurrent checkpoint. Load it with "
+                "RecurrentSkillPolicyV2.load() from playmind.models.recurrent_policy."
+            )
         cfg = dict(meta.get("config") or {})
         obj = cls(
             skill_names=meta.get("skill_names") or cfg.get("skill_names") or list(DEFAULT_SKILLS),
@@ -581,9 +596,14 @@ class SkillPolicyV2:
         return obj
 
 
+def load_legacy_mlp(path: str | Path) -> SkillPolicyV2:
+    """Explicit loader for legacy last-frame structured MLP checkpoints."""
+    return SkillPolicyV2.load(path)
+
+
 def torch_install_instructions() -> str:
     return (
-        "PyTorch is not installed. Behavior-cloning training needs torch for the MLP.\n"
+        "PyTorch is not installed. Behavior-cloning training needs torch.\n"
         "Install CPU torch, then re-run:\n"
         "  pip install torch\n"
         "Docs: https://pytorch.org/get-started/locally/\n"

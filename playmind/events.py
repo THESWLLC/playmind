@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
+import time
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Mapping
+from typing import Any, Iterable, Mapping
 
 
 class EventType(str, Enum):
@@ -12,12 +13,20 @@ class EventType(str, Enum):
     TARGET_VALIDATED = "TargetValidated"
     DAMAGE_DEALT = "DamageDealt"
     DAMAGE_RECEIVED = "DamageReceived"
+    TARGET_LOST = "TargetLost"
+    SUSPECTED_KILL = "SuspectedKill"
     KILL_CONFIRMED = "KillConfirmed"
     OBJECTIVE_PROGRESSED = "ObjectiveProgressed"
     OBJECTIVE_COMPLETED = "ObjectiveCompleted"
     LOOT_CONFIRMED = "LootConfirmed"
     DEATH_CONFIRMED = "DeathConfirmed"
     RESURRECTION_CONFIRMED = "ResurrectionConfirmed"
+    BECAME_CONTROLLABLE = "BecameControllable"
+    LOADING_STARTED = "LoadingStarted"
+    LOADING_ENDED = "LoadingEnded"
+    SKILL_SUCCESS = "SkillSuccess"
+    SKILL_FAILURE = "SkillFailure"
+    # Legacy event names remain readable by old logs and callers.
     SKILL_SUCCEEDED = "SkillSucceeded"
     SKILL_FAILED = "SkillFailed"
     MODAL_CLEARED = "ModalCleared"
@@ -26,17 +35,26 @@ class EventType(str, Enum):
 
 
 @dataclass
-class Event:
-    """Base confirmed/candidate event with confidence in [0, 1]."""
+class ConfirmedEvent:
+    """Evidence-bearing event shared by detectors, lifecycle, and rewards."""
 
-    type: EventType
+    type: EventType | str
     confidence: float = 1.0
+    timestamp: float = field(default_factory=time.time)
     evidence: list[str] = field(default_factory=list)
+    conflicting_evidence: list[str] = field(default_factory=list)
+    source_frames: list[Any] = field(default_factory=list)
+    metadata: dict[str, Any] = field(default_factory=dict)
     payload: dict[str, Any] = field(default_factory=dict)
 
     @property
     def name(self) -> str:
-        return self.type.value
+        return self.type.value if isinstance(self.type, EventType) else str(self.type)
+
+
+@dataclass
+class Event(ConfirmedEvent):
+    """Backward-compatible base event name."""
 
 
 @dataclass
@@ -61,6 +79,20 @@ class DamageDealt(Event):
 class DamageReceived(Event):
     def __post_init__(self) -> None:
         self.type = EventType.DAMAGE_RECEIVED
+
+
+@dataclass
+class TargetLost(Event):
+    def __post_init__(self) -> None:
+        self.type = EventType.TARGET_LOST
+
+
+@dataclass
+class SuspectedKill(Event):
+    """A weak combat outcome which must never receive confirmed-kill reward."""
+
+    def __post_init__(self) -> None:
+        self.type = EventType.SUSPECTED_KILL
 
 
 @dataclass
@@ -102,13 +134,47 @@ class ResurrectionConfirmed(Event):
 
 
 @dataclass
+class BecameControllable(Event):
+    def __post_init__(self) -> None:
+        self.type = EventType.BECAME_CONTROLLABLE
+
+
+@dataclass
+class LoadingStarted(Event):
+    def __post_init__(self) -> None:
+        self.type = EventType.LOADING_STARTED
+
+
+@dataclass
+class LoadingEnded(Event):
+    def __post_init__(self) -> None:
+        self.type = EventType.LOADING_ENDED
+
+
+@dataclass
+class SkillSuccess(Event):
+    def __post_init__(self) -> None:
+        self.type = EventType.SKILL_SUCCESS
+
+
+@dataclass
+class SkillFailure(Event):
+    def __post_init__(self) -> None:
+        self.type = EventType.SKILL_FAILURE
+
+
+@dataclass
 class SkillSucceeded(Event):
+    """Legacy spelling; new detectors emit :class:`SkillSuccess`."""
+
     def __post_init__(self) -> None:
         self.type = EventType.SKILL_SUCCEEDED
 
 
 @dataclass
 class SkillFailed(Event):
+    """Legacy spelling; new detectors emit :class:`SkillFailure`."""
+
     def __post_init__(self) -> None:
         self.type = EventType.SKILL_FAILED
 
@@ -131,7 +197,32 @@ class SensorConflict(Event):
         self.type = EventType.SENSOR_CONFLICT
 
 
-_KILL_MIN_EVIDENCE = 2
+KILL_ORTHOGONAL_EVIDENCE_CLASSES = frozenset(
+    {"hp_zero", "loot_or_xp", "objective_kill", "explicit_flag"}
+)
+
+_KILL_EVIDENCE_CLASS_BY_SIGNAL: dict[str, str] = {
+    "target_hp_near_zero": "hp_zero",
+    "target_hp_zero": "hp_zero",
+    "loot_or_xp_text": "loot_or_xp",
+    "loot_or_xp_flag": "loot_or_xp",
+    "objective_kill_count_increased": "objective_kill",
+    "objective_kill": "objective_kill",
+    "explicit_kill_flag": "explicit_flag",
+}
+
+
+def kill_evidence_classes(evidence: Iterable[str]) -> set[str]:
+    """Return independent kill-evidence classes represented by signals."""
+    classes: set[str] = set()
+    for raw in evidence:
+        signal = str(raw).strip().lower()
+        mapped = _KILL_EVIDENCE_CLASS_BY_SIGNAL.get(signal)
+        if mapped:
+            classes.add(mapped)
+        elif signal in KILL_ORTHOGONAL_EVIDENCE_CLASSES:
+            classes.add(signal)
+    return classes
 
 
 def _hp(obs: Mapping[str, Any], key: str = "vision_player_hp") -> float | None:
@@ -195,6 +286,28 @@ def _collect_kill_evidence(prev: Mapping[str, Any], nxt: Mapping[str, Any]) -> l
     return evidence
 
 
+def _is_loading(obs: Mapping[str, Any]) -> bool:
+    return bool(obs.get("loading") or obs.get("is_loading")) or str(
+        obs.get("life_phase") or ""
+    ).lower() == "loading"
+
+
+def _is_controllable(obs: Mapping[str, Any]) -> bool:
+    phase = str(obs.get("life_phase") or "").lower()
+    alive = (
+        not bool(obs.get("is_dead"))
+        and not bool(obs.get("is_ghost"))
+        and phase not in {"dead_dialog", "confirm", "release_confirm", "rez_picker", "ghost", "loading"}
+    )
+    responsive = bool(
+        obs.get("controls_responsive")
+        or obs.get("controllable")
+        or obs.get("can_control")
+        or obs.get("input_responsive")
+    )
+    return alive and responsive and not _is_loading(obs)
+
+
 def detect_events(
     prev: Mapping[str, Any],
     action: str,
@@ -255,18 +368,46 @@ def detect_events(
             )
         )
 
-    # Kill — multi-evidence only
+    # Kill — a combat transition alone is never confirmation. At least one
+    # orthogonal class (HP zero, loot/XP, objective count, or explicit flag)
+    # must corroborate the outcome.
     kill_ev = _collect_kill_evidence(prev, nxt)
-    if len(kill_ev) >= _KILL_MIN_EVIDENCE:
-        conf = min(1.0, 0.45 + 0.2 * len(kill_ev))
+    kill_classes = kill_evidence_classes(kill_ev)
+    contextual = {
+        item for item in kill_ev if item in {"target_lost_after_combat", "combat_ended"}
+    }
+    explicitly_confirmed = "explicit_flag" in kill_classes
+    kill_confirmed = bool(kill_classes) and (
+        explicitly_confirmed or bool(contextual) or len(kill_classes) >= 2
+    )
+    if kill_confirmed:
+        conf = min(1.0, 0.55 + 0.15 * len(kill_classes) + 0.05 * len(contextual))
         events.append(
             KillConfirmed(
                 type=EventType.KILL_CONFIRMED,
                 confidence=conf,
                 evidence=list(kill_ev),
+                metadata={"evidence_classes": sorted(kill_classes)},
             )
         )
-    # Explicitly do NOT emit KillConfirmed on mere target loss (single evidence).
+    elif contextual:
+        if "target_lost_after_combat" in contextual:
+            events.append(
+                TargetLost(
+                    type=EventType.TARGET_LOST,
+                    confidence=0.65,
+                    evidence=["target_lost_after_combat"],
+                )
+            )
+        if len(contextual) >= 2:
+            events.append(
+                SuspectedKill(
+                    type=EventType.SUSPECTED_KILL,
+                    confidence=0.4,
+                    evidence=sorted(contextual),
+                    metadata={"rewardable_as_kill": False},
+                )
+            )
 
     # Objectives
     try:
@@ -283,7 +424,13 @@ def detect_events(
             )
     except (TypeError, ValueError):
         pass
-    if nxt.get("goal_complete") or nxt.get("objective_completed"):
+    prev_complete = bool(
+        prev.get("goal_complete") or prev.get("objective_completed") or prev.get("quest_complete")
+    )
+    next_complete = bool(
+        nxt.get("goal_complete") or nxt.get("objective_completed") or nxt.get("quest_complete")
+    )
+    if next_complete and not prev_complete:
         events.append(
             ObjectiveCompleted(
                 type=EventType.OBJECTIVE_COMPLETED,
@@ -339,11 +486,39 @@ def detect_events(
             )
         )
 
+    prev_loading = _is_loading(prev)
+    next_loading = _is_loading(nxt)
+    if next_loading and not prev_loading:
+        events.append(
+            LoadingStarted(
+                type=EventType.LOADING_STARTED,
+                confidence=0.95,
+                evidence=["loading_false_to_true"],
+            )
+        )
+    if prev_loading and not next_loading:
+        events.append(
+            LoadingEnded(
+                type=EventType.LOADING_ENDED,
+                confidence=0.95,
+                evidence=["loading_true_to_false"],
+            )
+        )
+
+    if _is_controllable(nxt) and not _is_controllable(prev):
+        events.append(
+            BecameControllable(
+                type=EventType.BECAME_CONTROLLABLE,
+                confidence=0.9,
+                evidence=["controls_responsive_edge"],
+            )
+        )
+
     # Skill outcomes (caller may set flags)
     if nxt.get("skill_succeeded"):
         events.append(
-            SkillSucceeded(
-                type=EventType.SKILL_SUCCEEDED,
+            SkillSuccess(
+                type=EventType.SKILL_SUCCESS,
                 confidence=float(nxt.get("skill_success_confidence") or 0.8),
                 evidence=["skill_succeeded_flag"],
                 payload={"skill": nxt.get("skill_name")},
@@ -352,8 +527,8 @@ def detect_events(
     if nxt.get("skill_failed"):
         reason = str(nxt.get("skill_fail_reason") or "failed")
         events.append(
-            SkillFailed(
-                type=EventType.SKILL_FAILED,
+            SkillFailure(
+                type=EventType.SKILL_FAILURE,
                 confidence=0.85,
                 evidence=[reason],
                 payload={"skill": nxt.get("skill_name"), "reason": reason},
@@ -361,8 +536,8 @@ def detect_events(
         )
     if nxt.get("skill_timeout"):
         events.append(
-            SkillFailed(
-                type=EventType.SKILL_FAILED,
+            SkillFailure(
+                type=EventType.SKILL_FAILURE,
                 confidence=0.9,
                 evidence=["timeout"],
                 payload={"skill": nxt.get("skill_name"), "reason": "timeout"},

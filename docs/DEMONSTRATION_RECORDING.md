@@ -8,6 +8,8 @@ Sessions land under `data/playmind/demonstrations/<session_id>/` with:
 - `session.json` — outcome / notes
 - optional `frames/` screenshots
 
+Recording schema 1 is the on-disk demonstration format. Training converts structured observation dictionaries to [feature schema v2](./FEATURE_SCHEMA.md); saved frames are not consumed by the current model.
+
 ## Record a session (library)
 
 ```bash
@@ -26,6 +28,20 @@ print(rec.stop())
 PY
 ```
 
+## Episode and quality rules
+
+- Give each contiguous gameplay episode a stable `episode_id`; change it at true lifecycle boundaries.
+- The dataset groups rows by `(session_id, episode_id)`, so sequence windows never cross an episode or concatenate same-named episodes from different sessions.
+- Train/validation/test assignment is deterministic and episode-wise by default. A given episode ID stays in one split.
+- Mark unusable sessions or samples `bad`. Bad and unlabeled rows are excluded by default; failed-but-valid demonstrations remain useful labeled data.
+- Do not label death dialog, ghost/runback, loading, or not-yet-controllable recovery as normal gameplay. See [EPISODE_LIFECYCLE.md](./EPISODE_LIFECYCLE.md).
+
+## Sequence windows
+
+The recurrent dataset creates one causal window per eligible target row (subject to `--stride` and `--min-sequence-length`). Each window contains at most the latest 16 rows by default, remains inside one episode, and is left-padded with zero rows plus a validity mask.
+
+Keep timestamps and labels ordered. Longer continuous recordings are acceptable when episode IDs are correct; a recorder session does not itself guarantee one episode.
+
 ## Review recorded data
 
 ```bash
@@ -37,9 +53,10 @@ for s in list_sessions():
     print(s.name, "samples=", len(rows))
 PY
 
-# Validate windows for BC
+# Validate recurrent windows and episode-separated split
 PYTHONPATH=. python3 scripts/train_behavior_clone.py --dry-validate-only \
-  --data-dir data/playmind/demonstrations
+  --data-dir data/playmind/demonstrations \
+  --history-length 16
 ```
 
 ## Config knobs
@@ -55,4 +72,6 @@ In `config/owned_game.json` under `learning_v2.demonstration`:
 }
 ```
 
-See also: [TRAINING.md](./TRAINING.md) · [QUICKSTART_V2.md](./QUICKSTART_V2.md)
+Recording frames does not imply visual learning: `VisualObservationEncoder` is currently a placeholder.
+
+See [TRAINING.md](./TRAINING.md), [RECURRENT_POLICY.md](./RECURRENT_POLICY.md), and [QUICKSTART_V2.md](./QUICKSTART_V2.md).

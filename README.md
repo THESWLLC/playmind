@@ -7,12 +7,14 @@ Local AI agent framework for **games you own** (or are allowed to automate).
 
 ## Status
 
-**Learning Architecture V2 is implemented on `main`** (skills, hybrid/scripted/BC policies, demos, train/eval, sensor metrics, owned GUI V2, config validation, migration, diagnostics).
+**Learning Architecture V2's recurrent next phase is implemented on this branch:** schema-v2 structured features, a last-16 GRU policy, skill commitment/hysteresis, recovery-aware episode lifecycle, and evidence-separated offline evaluation.
 
 | Layer | State |
 |-------|--------|
-| Framework / V2 learning stack | Done — see [docs/QUICKSTART_V2.md](docs/QUICKSTART_V2.md) |
-| Competent play on *your* game | Local work — calibrate window/ROIs/keymap, record demos, optionally train BC |
+| Framework / V2 learning stack | Implemented and automated-test covered — see [docs/QUICKSTART_V2.md](docs/QUICKSTART_V2.md) |
+| Trained recurrent policy | Needs real, episode-labeled demonstrations and held-out evaluation |
+| Live gameplay improvement | Not measured; no improvement claim |
+| Visual learning | Not implemented |
 
 Without a BC checkpoint, `policy_mode: hybrid` runs **scripted skills** (safe default).
 
@@ -59,12 +61,14 @@ Keyboard is **off** unless `i_own_this_game=true`, `enable_keyboard=true`, and y
 # Scripted / hybrid dry-run
 python3 scripts/run_owned_loop.py --config config/owned_game.json --max-ticks 30
 
-# Validate demos / train BC (needs demos; torch optional for real MLP train)
-python3 scripts/train_behavior_clone.py --dry-validate-only
-python3 scripts/train_behavior_clone.py --checkpoint models/checkpoints/skill_policy_v2.json
+# Validate demos / train recurrent BC (history length defaults to 16)
+python3 scripts/train_behavior_clone.py --history-length 16 --dry-validate-only
+python3 scripts/train_behavior_clone.py --history-length 16 \
+  --checkpoint models/checkpoints/recurrent_skill_policy.json
 
-# Eval + diagnostics
-python3 scripts/run_evaluation.py
+# Actuator-free evaluation + diagnostics
+python3 scripts/run_evaluation.py \
+  --checkpoints models/checkpoints/recurrent_skill_policy.json
 python3 scripts/export_diagnostics.py
 python3 scripts/migrate_legacy_learning.py --data-dir data/playmind/owned
 ```
@@ -97,7 +101,8 @@ python3 -m playmind --ollama --ollama-model playmind-planner --episodes 1
 
 ## Docs
 
-- [QUICKSTART_V2](docs/QUICKSTART_V2.md) · [LEARNING_ARCHITECTURE_V2](docs/LEARNING_ARCHITECTURE_V2.md) · [SKILLS](docs/SKILLS.md)
+- [QUICKSTART_V2](docs/QUICKSTART_V2.md) · [LEARNING_ARCHITECTURE_V2](docs/LEARNING_ARCHITECTURE_V2.md) · [RECURRENT_POLICY](docs/RECURRENT_POLICY.md)
+- [SKILL_COMMITMENT](docs/SKILL_COMMITMENT.md) · [EPISODE_LIFECYCLE](docs/EPISODE_LIFECYCLE.md) · [FEATURE_SCHEMA](docs/FEATURE_SCHEMA.md)
 - [DEMONSTRATION_RECORDING](docs/DEMONSTRATION_RECORDING.md) · [TRAINING](docs/TRAINING.md) · [EVALUATION](docs/EVALUATION.md)
 - [SENSOR_LABELING](docs/SENSOR_LABELING.md) · [MIGRATION](docs/MIGRATION.md)
 - [FULL_STACK](docs/FULL_STACK.md) · [COMPLIANCE_BOUNDARIES](docs/COMPLIANCE_BOUNDARIES.md)
