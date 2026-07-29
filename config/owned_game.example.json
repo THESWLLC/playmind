@@ -1,0 +1,20 @@
+{
+  "i_own_this_game": false,
+  "enable_keyboard": false,
+  "game_name": "MyOwnedGame",
+  "keymap_path": "config/keymap.example.json",
+  "logout_action": "logout",
+  "capture": {
+    "mode": "monitor",
+    "monitor_index": 1
+  },
+  "rois": {
+    "hp_roi": [40, 40, 240, 70]
+  },
+  "session": {
+    "play_minutes": 180,
+    "break_minutes_min": 10,
+    "break_minutes_max": 40,
+    "max_wall_hours": 14
+  }
+}

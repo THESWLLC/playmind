@@ -7,5 +7,6 @@
   "loot": "f",
   "interact": "e",
   "open_quest_log": "l",
+  "logout": "f12",
   "wait": null
 }

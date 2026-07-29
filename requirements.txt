@@ -1,7 +1,14 @@
-# PlayMind core demo is stdlib-only.
-# Optional vision extras (install when you want screenshot OCR):
+# Core demo: stdlib only.
+
+# Optional owned-game / vision stack:
+# mss>=9.0.0
 # Pillow>=10.0.0
 # pytesseract>=0.3.10
-# opencv-python-headless>=4.8.0
-# numpy>=1.26.0
-# requests>=2.31.0
+# pynput>=1.7.6
+
+# Optional LoRA fine-tune:
+# torch
+# transformers
+# datasets
+# peft
+# accelerate

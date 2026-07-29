@@ -8,6 +8,9 @@ data/
 .venv/
 venv/
 models/checkpoints/
+models/playmind-lora/
+models/Modelfile.playmind
+config/owned_game.json
 .idea/
 .vscode/
 *.egg-info/
