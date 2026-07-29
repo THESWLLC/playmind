@@ -121,11 +121,39 @@ def write_index(
 update_index = write_index
 
 
+def load_latest(
+    root: str | Path = DEFAULT_EVALUATION_ROOT,
+) -> dict[str, Any] | None:
+    """Load the newest canonical report, normalizing legacy ``backends`` data."""
+
+    reports = discover_reports(root)
+    if not reports:
+        return None
+    latest = dict(reports[0])
+    path = Path(str(latest["path"]))
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return latest
+    if not isinstance(raw, Mapping):
+        return latest
+    report = dict(raw)
+    report["comparisons"] = normalize_comparisons(report)
+    latest["report"] = report
+    latest["comparisons"] = report["comparisons"]
+    try:
+        latest["modified_at"] = path.stat().st_mtime
+    except OSError:
+        pass
+    return latest
+
+
 __all__ = [
     "DEFAULT_EVALUATION_INDEX",
     "DEFAULT_EVALUATION_ROOT",
     "discover_evaluations",
     "discover_reports",
+    "load_latest",
     "normalize_comparisons",
     "normalize_report",
     "update_index",
