@@ -7,16 +7,28 @@ Local AI agent framework for **games you own** (or are allowed to automate).
 
 ## Status
 
-**Learning Architecture V2's recurrent next phase is implemented on this branch:** schema-v2 structured features, a last-16 GRU policy, skill commitment/hysteresis, recovery-aware episode lifecycle, and evidence-separated offline evaluation.
+**Planner V2 and the learning-proof GUI are implemented on this branch:** structured LLM skill plans, strict validation and runtime modes, physical demonstration capture/segmentation, planner dataset export, QLoRA/DPO entry points, evaluation, and an audited model registry. Real useful play still needs clean human demonstrations and held-out evaluation; no live improvement claim is made.
 
 | Layer | State |
 |-------|--------|
-| Framework / V2 learning stack | Implemented and automated-test covered — see [docs/QUICKSTART_V2.md](docs/QUICKSTART_V2.md) |
-| Trained recurrent policy | Needs real, episode-labeled demonstrations and held-out evaluation |
+| Planner V2 / learning-proof GUI | Implemented and automated-test covered — see [docs/MMO_LLM_QUICKSTART.md](docs/MMO_LLM_QUICKSTART.md) |
+| Framework / recurrent V2 learning stack | Implemented and automated-test covered — see [docs/QUICKSTART_V2.md](docs/QUICKSTART_V2.md) |
+| Planner and recurrent trained models | Need real, episode-labeled demonstrations and held-out evaluation |
 | Live gameplay improvement | Not measured; no improvement claim |
 | Visual learning | Not implemented |
 
 Without a BC checkpoint, `policy_mode: hybrid` runs **scripted skills** (safe default).
+
+## Windows quick start
+
+```powershell
+Copy-Item config\owned_game.example.json config\owned_game.json
+.\setup_windows.ps1
+.\start_playmind.bat
+```
+
+This starts the Control Center in safe shadow mode with keyboard input blocked.
+First-time workflow: [MMO LLM planner quickstart](docs/MMO_LLM_QUICKSTART.md).
 
 ## Quick start (no extra installs)
 
@@ -106,6 +118,9 @@ python3 -m playmind --ollama --ollama-model playmind-planner --episodes 1
 
 ## Docs
 
+- [MMO_LLM_QUICKSTART](docs/MMO_LLM_QUICKSTART.md) · [MMO_LLM_ARCHITECTURE](docs/MMO_LLM_ARCHITECTURE.md) · [HUMAN_DEMONSTRATIONS](docs/HUMAN_DEMONSTRATIONS.md)
+- [PLANNER_DATASET](docs/PLANNER_DATASET.md) · [PLANNER_TRAINING](docs/PLANNER_TRAINING.md) · [PLANNER_EVALUATION](docs/PLANNER_EVALUATION.md) · [MODEL_PROMOTION](docs/MODEL_PROMOTION.md)
+- [WINDOWS_SETUP](docs/WINDOWS_SETUP.md) · [WSL2_TRAINING](docs/WSL2_TRAINING.md) · [TROUBLESHOOTING](docs/TROUBLESHOOTING.md)
 - [LOCAL_NEXT_STEPS](docs/LOCAL_NEXT_STEPS.md) · [QUICKSTART_V2](docs/QUICKSTART_V2.md) · [LEARNING_ARCHITECTURE_V2](docs/LEARNING_ARCHITECTURE_V2.md) · [RECURRENT_POLICY](docs/RECURRENT_POLICY.md)
 - [SKILL_COMMITMENT](docs/SKILL_COMMITMENT.md) · [EPISODE_LIFECYCLE](docs/EPISODE_LIFECYCLE.md) · [FEATURE_SCHEMA](docs/FEATURE_SCHEMA.md)
 - [DEMONSTRATION_RECORDING](docs/DEMONSTRATION_RECORDING.md) · [TRAINING](docs/TRAINING.md) · [EVALUATION](docs/EVALUATION.md)

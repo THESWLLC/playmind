@@ -8,6 +8,16 @@ Verified against source code, not prior documentation claims.
 
 ---
 
+## Status labels
+
+- **Implemented** — production path exists in source.
+- **Automated-test covered** — repository tests exercise the stated behavior.
+- **Smoke/mock tested** — only synthetic data, mocked backends, or failure
+  handling is covered; this is not a trained-model or gameplay result.
+- **Deferred** — requires user data, hardware, external tooling, or later work.
+
+---
+
 ## Capability matrix
 
 | Capability | Status | Notes |
@@ -24,19 +34,20 @@ Verified against source code, not prior documentation claims.
 | LoRA finetune PoC | **Existing but incomplete** | Full-precision LoRA; no QLoRA/DPO |
 | Ollama Modelfile builder | **Existing and usable** | Few-shot only |
 | Windows `.bat` launchers | **Existing but incomplete** | Hardcoded machine paths |
-| Planner V2 contract + validator | **Newly implemented** | This milestone |
-| Planner runtime modes (observe/shadow/…) | **Newly implemented** | This milestone |
-| Physical human input capture | **Newly implemented** | This milestone |
-| Skill segmentation (rule-based) | **Newly implemented** | This milestone |
-| Planner SFT / preference datasets | **Newly implemented** | This milestone |
-| QLoRA SFT + DPO trainers | **Newly implemented** | Tiny smoke + 4070 Ti presets |
-| Model registry + promotion gates | **Newly implemented** | This milestone |
-| Planner evaluation suite | **Newly implemented** | This milestone |
-| Learning-proof GUI | **Newly implemented** | Extends `owned_gui` |
-| Portable one-command Windows start | **Newly implemented** | `start_playmind.bat` / doctor |
-| Full GGUF conversion in CI | **Deferred** | Needs llama.cpp + large weights; detect + instruct |
+| Planner V2 contract + validator | **Newly implemented; automated-test covered** | Strict structured plans and skill allowlist |
+| Planner runtime modes (observe/shadow/…) | **Newly implemented; automated-test covered** | Centralized input authorization |
+| Physical human input capture | **Newly implemented; automated-test covered** | GUI focus provider remains deferred |
+| Skill segmentation (rule-based) | **Newly implemented; automated-test covered** | Narrow deterministic rules; GUI manual override deferred |
+| Planner SFT / preference datasets | **Newly implemented; automated-test covered** | Episode-safe split and source eligibility |
+| QLoRA SFT + DPO trainers | **Newly implemented; smoke/mock tested** | Synthetic smoke only; real 4070 Ti QLoRA untested |
+| Model registry + promotion gates | **Newly implemented; automated-test covered** | Manual override and rollback audit covered |
+| Planner evaluation suite | **Newly implemented; mock-backend tested** | Frozen suite is synthetic; no gameplay result |
+| Learning-proof GUI | **Newly implemented; API/UI test covered** | Extends `owned_gui`; benchmark report discovery path mismatch remains |
+| Portable one-command Windows start | **Newly implemented; dry-run/test covered** | `start_playmind.bat` / doctor; not executed on Windows CI here |
+| GGUF exporter failure/setup path | **Implemented; automated-test covered** | Full conversion deferred pending llama.cpp + merged weights |
 | Live human-like play without demos | **Deferred** | Needs user’s real demonstrations |
 | Anti-cheat bypass / injection | **Deferred (rejected)** | Explicitly out of scope |
+| Milestone documentation | **Newly implemented** | Quickstart, architecture, data, training, evaluation, promotion, Windows/WSL2, troubleshooting |
 
 ---
 
