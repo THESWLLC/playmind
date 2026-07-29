@@ -1,35 +1,77 @@
-# WoW-Like AI Research Workspace
+# PlayMind
 
-Feasibility and architecture study for **human-similar game decision research** related to World of Warcraft–*like* combat and UI understanding.
+Local AI agent framework for **games you own** (or are allowed to automate).
 
-## Important
+PlayMind can:
+- Play a built-in demo world
+- Learn from its own runs (tabular policy + experience logs)
+- Optionally ask you questions in teach mode
+- Optionally use a local Ollama LLM as planner
+- Export fine-tune JSONL for your own model later
 
-This repository is for **research, offline analysis, coaching prototypes, and custom simulators**.  
-It is **not** a bot for official World of Warcraft servers.
+> **Not for World of Warcraft or other ToS-restricted live clients.**  
+> Do not point this at official MMO clients with automated keyboard/mouse control.
 
-Automated control of characters on Blizzard’s live service violates the [Blizzard EULA](https://www.blizzard.com/en-us/legal/08b946df-660a-40e4-a072-1fbde65173b1/blizzard-end-user-license-agreement) (bots / unauthorized automation). See `docs/COMPLIANCE_BOUNDARIES.md`.
+## Quick start (no extra installs)
 
-## Documents
-
-| Doc | Contents |
-|-----|----------|
-| [docs/FEASIBILITY_STUDY.md](docs/FEASIBILITY_STUDY.md) | Executive conclusion, task matrix, roadmap, build/research decision |
-| [docs/COMPLIANCE_BOUNDARIES.md](docs/COMPLIANCE_BOUNDARIES.md) | Policy excerpts, permitted vs prohibited scope |
-| [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | Architectures A/B/C, stack, folder plan |
-| [docs/POC_PLAN.md](docs/POC_PLAN.md) | Offline combat coaching analyzer PoC |
-| [docs/EVALUATION_PLAN.md](docs/EVALUATION_PLAN.md) | Metrics and automated test suite |
-
-## Recommended next implementation
-
-**Offline Combat Coaching Analyzer** — prerecorded video + combat log → UI detection → ability recommendation overlay → scoring. **No key presses.**
-
-## Scaffold
-
-```text
-docs/ simulator/ vision/ decision_engine/ models/
-data_collection/ evaluation/ ui/ tests/ config/
+```bash
+python3 playmind_onefile.py --episodes 5
 ```
 
-## Workspace note
+Or the package CLI:
 
-This cloud-agent run started with **no attached git remote/repository**. Documentation and scaffold were created as a greenfield research tree on branch `cursor/wow-ai-feasibility-study-3737`.
+```bash
+python3 -m playmind --episodes 5
+```
+
+Teach mode (agent asks you when unsure):
+
+```bash
+python3 -m playmind --teach --interactive --episodes 1
+```
+
+Optional local LLM planner (requires [Ollama](https://ollama.com)):
+
+```bash
+ollama pull dolphin-llama3
+python3 -m playmind --ollama --episodes 1 --interactive
+```
+
+## What gets saved
+
+Under `data/playmind/`:
+- `policy.json` — learned action values
+- `experience.jsonl` — self-play + teacher labels
+- `finetune.jsonl` — export for later LLM fine-tuning
+
+## Project layout
+
+```text
+playmind/           Agent, demo world, learning, planners
+playmind_onefile.py Shareable single-file demo
+docs/               Research + setup notes
+tests/              Automated tests
+```
+
+## Create the GitHub repo
+
+This cloud environment has **no GitHub login**, so publish from your machine:
+
+```bash
+# from this project root
+gh auth login
+gh repo create playmind --private --source=. --remote=origin --push
+```
+
+Details: [docs/GITHUB_SETUP.md](docs/GITHUB_SETUP.md)
+
+## Roadmap
+
+1. Demo world + self-learning + teach mode *(this repo)*
+2. Window capture + OCR/CV adapters
+3. Parsec/keyboard actuator for **your** game
+4. Fine-tune local LLM on `finetune.jsonl`
+
+## License
+
+MIT — see [LICENSE](LICENSE)

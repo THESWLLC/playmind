@@ -8,3 +8,8 @@ data/
 .venv/
 venv/
 models/checkpoints/
+.idea/
+.vscode/
+*.egg-info/
+dist/
+build/
