@@ -259,6 +259,48 @@ class ModelRegistry:
             ).fetchone()
         return self._row(row)
 
+    def update_metrics(
+        self,
+        model_id: str,
+        *,
+        train_metrics: Mapping[str, Any] | None = None,
+        eval_metrics: Mapping[str, Any] | None = None,
+        reason: str = "metrics updated",
+    ) -> dict[str, Any]:
+        """Update benchmark data without changing or promoting model status."""
+        current = self._require(model_id)
+        next_train = (
+            dict(train_metrics)
+            if train_metrics is not None
+            else dict(current["train_metrics"])
+        )
+        next_eval = (
+            dict(eval_metrics)
+            if eval_metrics is not None
+            else dict(current["eval_metrics"])
+        )
+        with self._lock, self._connect() as connection:
+            connection.execute(
+                """
+                UPDATE models SET train_metrics = ?, eval_metrics = ?
+                WHERE model_id = ?
+                """,
+                (_json(next_train), _json(next_eval), model_id),
+            )
+            self._audit(
+                connection,
+                model_id=model_id,
+                action="update_metrics",
+                previous_status=str(current["status"]),
+                new_status=str(current["status"]),
+                reason=reason,
+                details={
+                    "train_metrics_updated": train_metrics is not None,
+                    "eval_metrics_updated": eval_metrics is not None,
+                },
+            )
+        return self._require(model_id)
+
     def _require(self, model_id: str) -> dict[str, Any]:
         model = self.get(model_id)
         if model is None:
