@@ -390,22 +390,36 @@ def enrich_obs_from_screen(
 
         img = Image.open(frame_path).convert("RGB")
         w, h = img.size
-        sample = img.resize((160, 90))
+        # Mid-world only — buffs/chat/red death text skew full-frame saturation.
+        # Spirit world is blue-cyan tinted; chroma there must NOT count as "alive color".
+        import colorsys
+
+        sample = img.crop((int(w * 0.28), int(h * 0.28), int(w * 0.72), int(h * 0.72)))
+        sample = sample.resize((96, 54))
         px = list(sample.getdata())
         sat = 0
         for r, g, b in px:
+            hh, ss, vv = colorsys.rgb_to_hsv(r / 255.0, g / 255.0, b / 255.0)
+            if ss < 0.14 or vv < 0.08:
+                continue
+            # Cyan→blue ghost cast (Ascension spirit world).
+            if 0.40 <= hh <= 0.72:
+                continue
             mx, mn = max(r, g, b), min(r, g, b)
-            if mx > 0 and (mx - mn) / mx > 0.2:
+            if mx > 0 and (mx - mn) / mx > 0.18:
                 sat += 1
         sat_frac = sat / max(1, len(px))
-        out["desaturated"] = sat_frac < 0.35
+        # Fraction of mid-world pixels with non-ghost chroma (greens/browns/warms).
+        out["desaturated"] = sat_frac < 0.12
+        out["sat_frac"] = round(sat_frac, 3)
 
         # Top-center button band: dark panels with gold text common on ghost UI
         band = img.crop((int(w * 0.30), int(h * 0.03), int(w * 0.70), int(h * 0.16)))
-        bp = list(band.getdata())
+        band_s = band.resize((160, 48))
+        bp = list(band_s.getdata())
         dark = sum(1 for r, g, b in bp if r + g + b < 140)
         gold = sum(1 for r, g, b in bp if r > 150 and g > 110 and b < 100)
-        out["ghost_buttons"] = (dark / max(1, len(bp)) > 0.25) and gold > 80 and out["desaturated"]
+        out["ghost_buttons"] = (dark / max(1, len(bp)) > 0.22) and gold > 30 and out["desaturated"]
         if out["ghost_buttons"]:
             out["is_ghost"] = True
     except Exception:
@@ -429,6 +443,15 @@ def enrich_obs_from_screen(
             out["is_dead"] = True
             out["confirm_pending"] = True
             out["ghost_buttons"] = True
+        # Game chat / UI explicitly says nothing is targeted — trust it over red tiles.
+        if (
+            "no target" in low
+            or "have no targe" in low
+            or "you have no targe" in low
+        ):
+            out["has_target"] = False
+            out["in_combat"] = False
+            out["target_hp_est"] = None
         # Already released: corpse distance / spirit healer ⇒ ghost, not death dialog.
         if re.search(r"\b\d+\s*yds?\b", low) or "spirit healer" in low:
             out["is_ghost"] = True

@@ -22,30 +22,34 @@ def classify_life_raw(obs: dict[str, Any]) -> Phase:
     ocr = (obs.get("screen_ocr") or "").lower()
     hits = " ".join(str(h) for h in (obs.get("ui_hits") or [])).lower()
     blob = f"{ocr} {hits}"
+    # OCR chunks are joined with " | " — normalize so phrases still match.
+    blob_flat = re.sub(r"\s*\|\s*", " ", blob)
+    blob_flat = re.sub(r"\s+", " ", blob_flat)
     desat = bool(obs.get("desaturated"))
     hp = float(obs.get("vision_player_hp") or obs.get("player", {}).get("hp") or 0.5)
 
-    if "are you sure" in blob or "want to return" in blob:
+    if "are you sure" in blob_flat or "want to return" in blob_flat:
         return "confirm"
-    if "choose where" in blob or (
-        "closest" in blob and any(k in blob for k in ("town", "city", "gity", "cancel"))
+    if "choose where" in blob_flat or (
+        "closest" in blob_flat and any(k in blob_flat for k in ("town", "city", "gity", "cancel"))
     ):
         return "rez_picker"
-    if "you are dead" in blob:
+    if "you are dead" in blob_flat:
         return "dead_dialog"
-    if ("return to graveyard" in blob or "resurrect in a safe zone" in blob) and (
-        desat or hp < 0.08 or obs.get("is_dead")
-    ):
+    if "return to graveyard" in blob_flat or "release spirit" in blob_flat:
         return "dead_dialog"
-    # Ghost: corpse distance or spirit world without death buttons
-    if re.search(r"\b\d+\s*yds?\b", blob) or "spirit healer" in blob:
+    # Split OCR often yields "resurrect in | a safe zone"
+    if "resurrect" in blob_flat and "safe zone" in blob_flat:
+        return "dead_dialog"
+    if "graveyard" in blob_flat and ("return" in blob_flat or desat or hp < 0.1):
+        return "dead_dialog"
+    if re.search(r"\b\d+\s*yds?\b", blob_flat) or "spirit healer" in blob_flat:
         return "ghost"
-    if (desat or obs.get("is_ghost")) and hp < 0.08:
-        if "return to" in blob or "resurrect" in blob:
-            return "dead_dialog"
-        return "ghost"
-    if obs.get("is_dead") and not desat:
+    # Grey world + empty HP is strong evidence even before OCR catches the title.
+    if desat and hp < 0.08:
         return "dead_dialog"
+    if desat and obs.get("ghost_buttons"):
+        return "ghost"
     return "alive"
 
 
@@ -109,15 +113,52 @@ class LifeFSM:
                 else:
                     self.hold += 1
             else:
-                # Brief flicker to an earlier phase — ignore unless repeated
-                self.hold += 1
+                # Sticky phases can outlive the dialog. Step back only with strong
+                # evidence — never thrash confirm↔dead_dialog on OCR flicker.
+                ocr_l = (obs.get("screen_ocr") or "").lower()
+                ocr_flat = re.sub(r"\s*\|\s*", " ", ocr_l)
+                still_confirm = (
+                    "are you sure" in ocr_flat
+                    or "want to return" in ocr_flat
+                    or ("yes" in ocr_flat and "cancel" in ocr_flat)
+                )
+                strong_confirm = raw == "confirm" and self.phase == "rez_picker"
+                if still_confirm and self.phase in {"dead_dialog", "confirm", "rez_picker"}:
+                    if self.phase != "confirm":
+                        self.phase = "confirm"
+                        self.hold = 0
+                        self._commit = None
+                        self._commit_left = 0
+                        self._tried.clear()
+                    else:
+                        self.hold += 1
+                elif strong_confirm:
+                    self.phase = "confirm"
+                    self.hold = 0
+                    self._commit = None
+                    self._commit_left = 0
+                    self._tried.clear()
+                elif self.hold >= 6 and raw_i < cur_i:
+                    self.phase = raw
+                    self.hold = 0
+                    self._commit = None
+                    self._commit_left = 0
+                    self._tried.clear()
+                else:
+                    self.hold += 1
         else:
             # raw==alive while we think we're dead/ghost — wait for evidence
             self.hold += 1
 
         return self.phase
 
-    def action(self, obs: dict[str, Any], frame_path: Any = None, ui_memory: Any = None) -> tuple[str, str]:
+    def action(
+        self,
+        obs: dict[str, Any],
+        frame_path: Any = None,
+        ui_memory: Any = None,
+        process_memory: Any = None,
+    ) -> tuple[str, str]:
         """Return (action, reason) for the sticky phase — never farm while dead."""
         phase = self.update(obs)
         ocr = (obs.get("screen_ocr") or "").lower()
@@ -166,6 +207,16 @@ class LifeFSM:
             self._set_commit(act, 1)
             return act, f"life_fsm:ghost runback"
 
+        # Prefer actions that previously cleared this phase (process memory).
+        if process_memory is not None:
+            remembered = process_memory.best_pipeline_action(
+                phase, [f"click_label:{w}" for w in wants] + extras
+            )
+            if remembered and remembered not in self._tried:
+                self._tried.add(remembered)
+                self._set_commit(remembered, 1)
+                return remembered, f"life_fsm:{phase} memory→{remembered}"
+
         candidates = explore_click_candidates(frame_path, ui_memory, wants, ban="cancel")
         for h in obs.get("ui_hits") or []:
             hl = str(h).lower()
@@ -186,7 +237,7 @@ class LifeFSM:
         # Escalate randomness the longer we stay stuck in-phase.
         explore_p = 0.35 if self.hold <= 1 else min(0.95, 0.45 + 0.08 * self.hold)
         if self.hold >= 1 and random.random() < explore_p:
-            probe = random_ui_probe(frame_path, wants, tried=self._tried)
+            probe = random_ui_probe(frame_path, wants, tried=self._tried, memory=ui_memory)
             if probe:
                 self._tried.add(probe)
                 self._set_commit(probe, 1)
@@ -197,6 +248,15 @@ class LifeFSM:
                 self._tried.add(act)
                 self._set_commit(act, 1)
                 return act, f"life_fsm:{phase} random_try→{act}"
+            # OCR dry — keyboard / jitter so we never infinite-spam the same label.
+            if phase == "confirm":
+                fallbacks = [a for a in ("key:enter", "key:y") if a not in self._tried]
+                if not fallbacks:
+                    fallbacks = ["key:enter", "key:y"]
+                act = random.choice(fallbacks)
+                self._tried.add(act)
+                self._set_commit(act, 1)
+                return act, f"life_fsm:{phase} stuck_fallback→{act}"
 
         # First attempt / memory-guided: semantic label (OCR resolve + offset).
         act = semantic
@@ -210,6 +270,9 @@ class LifeFSM:
             if phase == "dead_dialog" and "return to graveyard" in a.lower():
                 act = a
                 break
+        # After many identical semantic misses, prefer Enter over another Yes click.
+        if phase == "confirm" and self.hold >= 4 and act.lower().startswith("click_label:yes"):
+            act = "key:enter"
         self._tried.add(act)
         self._set_commit(act, 1)
         return act, f"life_fsm:{phase} {reason}→{act}"

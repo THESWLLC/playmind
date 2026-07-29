@@ -415,12 +415,23 @@ def random_ui_probe(
     wants: list[str],
     *,
     tried: set[str] | None = None,
+    memory: UIMemory | None = None,
 ) -> str | None:
     """Pick a fresh spatial click near death/confirm UI for try→measure→remember."""
     import random
 
-    pool = explore_click_candidates(path, None, wants)
+    pool = explore_click_candidates(path, memory, wants)
     spatial = [a for a in pool if a.startswith("click:")]
+    # If OCR is dry, jitter around remembered successes so we keep searching.
+    if memory is not None:
+        for want in wants:
+            hit = memory.lookup(want)
+            if not hit:
+                continue
+            for _ in range(8):
+                jx = max(0.05, min(0.95, hit[0] + random.uniform(-0.07, 0.07)))
+                jy = max(0.05, min(0.95, hit[1] + random.uniform(-0.05, 0.10)))
+                spatial.append(f"click:{jx:.3f},{jy:.3f}")
     if not spatial:
         return None
     tried = tried or set()

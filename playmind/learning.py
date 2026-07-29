@@ -43,7 +43,11 @@ def owned_state_key(obs: dict[str, Any]) -> str:
     combat = "cbt" if obs.get("in_combat") else "peace"
     motion = "mv" if (obs.get("motion") or 0) > 4.0 else "still"
     near = "mob" if obs.get("hostiles_near") else "clear"
-    return f"hp:{hp_bin}|{target}|{combat}|{motion}|{near}"
+    # Progressive curriculum bucket so stuck vs moving learn different Q rows.
+    stg = str(obs.get("progress_stage") or "explore")
+    if stg not in {"explore", "seek", "engage", "push", "break_loop"}:
+        stg = "explore"
+    return f"hp:{hp_bin}|{target}|{combat}|{motion}|{near}|stg:{stg}"
 
 
 def reward_owned(prev: dict[str, Any], action: str, nxt: dict[str, Any]) -> float:
@@ -195,6 +199,19 @@ def reward_owned(prev: dict[str, Any], action: str, nxt: dict[str, Any]) -> floa
         reward -= 0.5
     if nxt.get("is_dead") and not prev.get("is_dead"):
         reward -= 1.0
+
+    # Progressive learning: idle combat / leave-bubble milestones.
+    stagnant = int(prev.get("stagnant") or 0)
+    no_dmg = int(prev.get("no_damage_casts") or 0)
+    if combat_press and not (
+        had_target and has_target and prev_thp > 0 and next_thp > 0 and next_thp < prev_thp - 0.02
+    ):
+        if no_dmg >= 2 or stagnant >= 4:
+            reward -= 0.12 + 0.03 * min(10, max(no_dmg, stagnant))
+    if (a.startswith("move_") or a.startswith("hold:")) and float(nxt.get("motion") or 0) >= 4.0:
+        if stagnant >= 5 or no_dmg >= 4:
+            reward += 0.35  # escaping a freeze is high-value progress
+
     return round(reward, 4)
 
 

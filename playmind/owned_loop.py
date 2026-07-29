@@ -45,6 +45,8 @@ from playmind.directive import (
 from playmind.screen_llm import ScreenLLMPlanner, enrich_obs_from_screen
 from playmind.session import SessionConfig, SessionScheduler
 from playmind.stuck import StuckTracker, detect_blocking_modal
+from playmind.progress import ProgressTracker, ocr_says_no_target
+from playmind.process_memory import ProcessMemory
 from playmind.travel import TravelMemory
 from playmind.ui_memory import UIMemory, discover_and_remember, ensure_seeded
 from playmind.soul import feel_soul
@@ -147,6 +149,9 @@ def vision_obs_from_frame(
         hp = 0.0
     # Nearby nameplates ≠ selected target. Selection = red ring / unit frame only.
     ocr_blob = f"{reading.quest_text or ''} {reading.raw_text or ''}"
+    if ocr_says_no_target(ocr_blob):
+        has_target = False
+        target_hp = None
     hostiles_near = detect_hostile_nameplate_ocr(ocr_blob)
     obs = {
         "player": {"x": 0, "y": 0, "hp": hp},
@@ -191,6 +196,9 @@ class OwnedGameLoop:
     _last_ocr: str = ""
     _life: LifeFSM = field(default_factory=LifeFSM)
     _travel: TravelMemory = field(default_factory=TravelMemory)
+    _progress: ProgressTracker = field(default_factory=ProgressTracker)
+    _process: ProcessMemory | None = None
+    _recent: list[tuple[dict[str, Any], str]] = field(default_factory=list)
 
     def _action_space(self, policy: OnlinePolicy, extra: str | None = None) -> list[str]:
         acts: list[str] = list(OWNED_ACTIONS)
@@ -260,6 +268,10 @@ class OwnedGameLoop:
         ability_memory = AbilityMemory(self.cfg.data_dir / "ability_memory.json")
         ensure_ability_seeded(ability_memory)
         self._ability_memory = ability_memory
+        self._process = ProcessMemory(self.cfg.data_dir / "process_memory.json")
+        self._process.load()
+        self._process.restore_travel(self._travel)
+        self._recent = []
 
         actuator: Actuator
         if self.cfg.dry_run or not owned.get("enable_keyboard", False):
@@ -412,26 +424,40 @@ class OwnedGameLoop:
                 obs = vision_obs_from_frame(
                     cap.path, rois, prev_frame=prev_frame_path, steps=ticks
                 )
-                # Cheap pixel sensors first; OCR only when useful.
+                # Cheap pixel sensors first; always peek death-dialog OCR (truth).
                 obs = enrich_obs_from_screen(cap.path, obs, do_ocr=False)
+                # Death UI lives in the dialog band — never skip it when world is grey,
+                # and scan it often anyway so we don't "feel alive" on a corpse.
                 need_death_ocr = bool(
                     obs.get("desaturated")
                     or obs.get("is_dead")
                     or obs.get("is_ghost")
                     or (self._life.phase != "alive")
+                    or (ticks % 2 == 0)  # every other tick: cross-check death ROI
                 )
                 ocr_mode = "death" if need_death_ocr else "alive"
-                run_ocr = need_death_ocr or (ticks % max(1, self.cfg.ocr_every) == 0)
+                run_ocr = True  # always OCR something — lies cost more than ~150ms
                 if run_ocr:
                     obs = enrich_obs_from_screen(
                         cap.path, obs, do_ocr=True, ocr_mode=ocr_mode
                     )
+                    # Merge a death-band peek into alive OCR so phrases aren't missed.
+                    if ocr_mode == "alive":
+                        death_peek = enrich_obs_from_screen(
+                            cap.path, {}, do_ocr=True, ocr_mode="death"
+                        )
+                        docr = death_peek.get("screen_ocr") or ""
+                        if docr:
+                            obs["screen_ocr"] = (
+                                f"{obs.get('screen_ocr') or ''} | {docr}"
+                            ).strip(" |")
                     if ticks % max(1, self.cfg.ocr_every) == 0 or need_death_ocr:
-                        ui_hits = discover_and_remember(cap.path, ui_memory, mode=ocr_mode)
+                        ui_hits = discover_and_remember(
+                            cap.path, ui_memory, mode="death" if need_death_ocr else ocr_mode
+                        )
                     else:
                         ui_hits = []
                 else:
-                    # Reuse last OCR string so life FSM doesn't go blind between scans.
                     if getattr(self, "_last_ocr", None):
                         obs["screen_ocr"] = self._last_ocr
                     ui_hits = []
@@ -466,6 +492,8 @@ class OwnedGameLoop:
                 # Sticky life phase before soul/decision — stops dead↔alive thrash.
                 self._life.update(obs)
                 obs = self._life.patch_obs(obs)
+                # Progressive curriculum: veto false targets, escalate when stagnant.
+                obs = self._progress.patch_obs(obs)
                 soul = feel_soul(obs, frame_path=cap.path)
                 obs.update(soul.to_obs())
                 if screen_brain is not None:
@@ -538,6 +566,42 @@ class OwnedGameLoop:
                         reward = reward_owned(obs, action, next_obs)
                         goal = self._goal or parse_directive(self.directive)
                         reward += directive_reward_bonus(goal, obs, action, next_obs)
+                        reward += self._progress.reward_bonus(obs, action, next_obs)
+                        self._progress.note(obs, action, next_obs, reward)
+                        next_obs = self._progress.patch_obs(next_obs)
+                        # Death cause → prevention; successful death clicks → pipeline memory.
+                        if self._process is not None:
+                            was_alive = (obs.get("life_phase") or "alive") == "alive" and not obs.get(
+                                "is_dead"
+                            )
+                            now_dead = bool(next_obs.get("is_dead")) or (
+                                next_obs.get("life_phase")
+                                in {"dead_dialog", "confirm", "rez_picker", "ghost"}
+                            )
+                            if was_alive and now_dead:
+                                cause = self._process.note_death_cause(obs, action)
+                                if self.cfg.learn and self.cfg.use_learned_policy:
+                                    # Teach flee in the pre-death state.
+                                    policy.teach(obs, "hold:s:1.2", boost=0.9)
+                                    policy.teach(obs, "hold:w:1.2", boost=0.5)
+                                    if action.startswith("key:") or action == "attack":
+                                        policy.teach(obs, action, boost=-0.7)
+                                next_obs["death_cause"] = cause
+                            phase0 = str(obs.get("life_phase") or "")
+                            phase1 = str(next_obs.get("life_phase") or "")
+                            order = ("dead_dialog", "confirm", "rez_picker", "ghost", "alive")
+                            if phase0 in order and phase1 in order:
+                                if order.index(phase1) > order.index(phase0) or (
+                                    bool(obs.get("is_dead")) and not bool(next_obs.get("is_dead"))
+                                ):
+                                    self._process.note_pipeline(phase0, action, success=True)
+                                elif phase0 == phase1 and phase0 != "alive" and reward < 0.2:
+                                    self._process.note_pipeline(phase0, action, success=False)
+                            if ticks % 10 == 0:
+                                self._process.apply_travel_snapshot(self._travel)
+                                self._process.save()
+                        self._recent.append((dict(obs), action))
+                        self._recent = self._recent[-20:]
                         if (
                             self._stuck.last_action == action
                             and reward <= 0.05
@@ -658,6 +722,13 @@ class OwnedGameLoop:
                     "travel_heading": self._travel.heading,
                     "travel_commit": self._travel.commit_left,
                     "still_farm": self._travel.still_farm,
+                    "progress_stage": obs.get("progress_stage") or self._progress.stage,
+                    "stagnant": obs.get("stagnant") if obs.get("stagnant") is not None else self._progress.stagnant,
+                    "no_damage_casts": obs.get("no_damage_casts")
+                    if obs.get("no_damage_casts") is not None
+                    else self._progress.no_damage_casts,
+                    "process_memory": self._process.summary() if self._process else "",
+                    "preventions": list(self._process.preventions) if self._process else [],
                     "bar_slots": obs.get("bar_slots_filled"),
                     "teacher_teaches": getattr(self._teacher, "teaches", 0) if self._teacher else 0,
                     "teacher_last": getattr(self._teacher, "last_better", "") if self._teacher else "",
@@ -670,12 +741,16 @@ class OwnedGameLoop:
                 else:
                     print(status)
         finally:
+            if self._process is not None:
+                self._process.apply_travel_snapshot(self._travel)
+                self._process.save()
             if self.cfg.learn:
                 policy.save(policy_path)
                 n = buffer.export_finetune_jsonl(self.cfg.data_dir / "finetune.jsonl")
                 print(
                     f"Saved policy={policy_path} experience={buffer.path} "
-                    f"finetune_rows={n} total_reward={total_reward:.2f}"
+                    f"finetune_rows={n} total_reward={total_reward:.2f} "
+                    f"process={self._process.summary() if self._process else ''}"
                 )
 
     def _reinforce_ui(
@@ -790,7 +865,9 @@ class OwnedGameLoop:
             or low.startswith("click_label:yes")
             or low.startswith("click_label:resurrect")
             or low.startswith("click_label:ok")
+            or low.startswith("click_label:accept")
             or low.startswith("click_label:a oe")
+            or "sanctuary" in low
         )
         # Poisoned Q keeps death-dialog pixel clicks while alive.
         death_click = False
@@ -827,22 +904,27 @@ class OwnedGameLoop:
                 )
                 return alt
             alt = policy.choose(obs, space) if space else "hold:w:1.1"
+            if alt.lower().startswith("click_label:") and is_world_mob_label(alt.split(":", 1)[-1]):
+                alt = "key:tab"
             self._decision_reason = (
                 (self._decision_reason or "") + f" | reject_death_while_alive→{alt}"
             )
             return alt
+        if alive and low in {"key:esc", "key:escape"} and not obs.get("modal_menu"):
+            # Esc mid-fight opens Options — don't.
+            alt = "key:1" if obs.get("has_target") else "hold:w:1.1"
+            self._decision_reason = (self._decision_reason or "") + f" | reject_esc→{alt}"
+            return alt
         if low.startswith("click_label:"):
             label = a.split(":", 1)[1]
-            if is_world_mob_label(label):
-                space = [
-                    x
-                    for x in self._action_space(policy)
-                    if not (
-                        x.lower().startswith("click_label:")
-                        and is_world_mob_label(x.split(":", 1)[-1])
-                    )
-                ]
-                alt = policy.choose(obs, space) if space else "key:tab"
+            lab = label.lower()
+            if (
+                is_world_mob_label(label)
+                or "shadowglen" in lab
+                or "shadowgle" in lab
+                or "aldrassil" in lab
+            ):
+                alt = "key:1" if obs.get("has_target") else "key:tab"
                 self._decision_reason = (
                     (self._decision_reason or "")
                     + f" | reject_mob_click({label})→{alt}"
@@ -887,19 +969,71 @@ class OwnedGameLoop:
             obs,
             frame_path=frame_path,
             ui_memory=getattr(self, "_ui_memory", None),
+            process_memory=self._process,
         )
         if life_act:
             self._decision_reason = life_reason
             return life_act
 
+        # Learned preventions from past deaths (flee / leave bubble / retarget).
+        if self._process is not None:
+            prev = self._process.prevention_action(obs)
+            if prev:
+                act, reason = prev
+                self._decision_reason = reason
+                return act
+
+        # Progressive learning override — leave the bubble when casts do nothing.
+        forced = self._progress.force_action(obs)
+        if forced:
+            act, reason = forced
+            self._decision_reason = reason
+            return act
+
         # Travel memory: leave the spawn bubble — discover heading, remember walls.
         if self._travel.needs_travel(obs):
-            # Brief Tab glance before long walks so we don't ignore real mobs.
-            if (
-                not obs.get("has_target")
-                and self._travel.commit_left <= 0
-                and random.random() < 0.22
-            ):
+            suspect = (
+                bool(obs.get("target_suspect"))
+                or int(obs.get("no_damage_casts") or 0) >= 3
+                or obs.get("progress_stage") in {"push", "break_loop"}
+                or self._travel.still_farm >= 5
+            )
+            if (obs.get("has_target") or obs.get("in_combat")) and not suspect:
+                self._travel.still_farm = 0
+                self._travel.expect_target = False
+                self._decision_reason = "travel:engage"
+                return "key:1" if random.random() < 0.6 else "attack"
+            # Stale / false target — do not mash 1; roam instead.
+            if suspect:
+                self._travel.still_farm = 0
+                self._travel.expect_target = False
+            # Tab sensor often misses Ascension red-ring — swing once after Tab.
+            if self._travel.expect_target:
+                self._travel.expect_target = False
+                self._decision_reason = "travel:swing_after_tab"
+                return "key:1"
+            # Tab every ~3rd roam tick; if Tab keeps missing, turn then resume.
+            if self._travel.tab_miss >= 3:
+                old = self._travel.heading
+                self._travel.tab_miss = 0
+                self._travel.heading = {
+                    "north": "east",
+                    "east": "south",
+                    "south": "west",
+                    "west": "north",
+                }.get(old, "east")
+                self._travel.commit_left = 0
+                turn = {
+                    "north": "hold:d:0.6",
+                    "east": "hold:s:0.6",
+                    "south": "hold:a:0.6",
+                    "west": "hold:w:0.6",
+                }
+                self._decision_reason = "travel:turn_after_tab_miss"
+                return turn.get(old, "hold:d:0.6")
+            do_tab = (self._tick % 3 == 0) or bool(obs.get("hostiles_near"))
+            if do_tab and not obs.get("has_target") and random.random() < 0.8:
+                self._travel.expect_target = True
                 self._decision_reason = "travel:glance_tab"
                 return "key:tab"
             act, reason = self._travel.action(obs)
@@ -972,7 +1106,14 @@ class OwnedGameLoop:
                     planner.last_raw = f"(goal explore) {hint}"
                 return hint
             act = policy.choose(obs, space)
-            self._decision_reason = f"learned_policy (ε={self.cfg.epsilon}) goal={goal.summary()}"
+            eps = self.cfg.epsilon
+            if int(obs.get("stagnant") or 0) >= 4 or int(obs.get("no_damage_casts") or 0) >= 3:
+                eps = min(0.85, eps + 0.35)
+                if random.random() < 0.55:
+                    act = random.choice(
+                        ["hold:w:1.2", "hold:d:1.2", "hold:a:1.2", "key:tab", "hold:s:0.8"]
+                    )
+            self._decision_reason = f"learned_policy (ε={eps}) goal={goal.summary()}"
             if isinstance(planner, ScreenLLMPlanner):
                 planner.last_mode = self._decision_reason
                 if not getattr(planner, "last_raw", ""):

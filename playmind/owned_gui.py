@@ -291,6 +291,36 @@ STATE = GuiState()
 
 
 def _run_owned(opts: dict[str, Any]) -> None:
+    # Hot-reload learning/sensor modules so Stop→Start picks up code edits
+    # without requiring a full GUI process restart.
+    import importlib
+
+    import playmind.life_fsm as _life_fsm
+    import playmind.owned_loop as _owned_loop
+    import playmind.process_memory as _process_memory
+    import playmind.progress as _progress
+    import playmind.screen_llm as _screen_llm
+    import playmind.travel as _travel
+    import playmind.ui_memory as _ui_memory
+    import playmind.vision as _vision
+    import playmind.learning as _learning
+
+    for mod in (
+        _life_fsm,
+        _ui_memory,
+        _screen_llm,
+        _vision,
+        _progress,
+        _process_memory,
+        _travel,
+        _learning,
+        _owned_loop,
+    ):
+        importlib.reload(mod)
+    global OwnedGameLoop, OwnedLoopConfig
+    OwnedGameLoop = _owned_loop.OwnedGameLoop
+    OwnedLoopConfig = _owned_loop.OwnedLoopConfig
+
     STATE.running = True
     STATE.stop_flag = False
     STATE.push("info", message="Owned loop starting…")
