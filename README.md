@@ -21,6 +21,15 @@ python3 playmind_onefile.py --episodes 5
 python3 -m playmind --episodes 5
 ```
 
+### GUI with live logging
+
+```bash
+PYTHONPATH=. python3 -m playmind.web_gui
+# open http://127.0.0.1:8765
+```
+
+Shows the world map, current action/HP/kills, and a scrolling event log.
+
 ## Full feature commands
 
 ```bash
