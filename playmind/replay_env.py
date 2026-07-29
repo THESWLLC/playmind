@@ -62,6 +62,23 @@ class ReplayEnv:
             allowed_skills=list(allowed_skills) if allowed_skills is not None else list(DEFAULT_SKILL_ORDER),
         )
 
+    @classmethod
+    def from_samples(
+        cls,
+        samples: Sequence[Mapping[str, Any]],
+        policy: Any | None = None,
+        *,
+        allowed_skills: Sequence[str] | None = None,
+    ) -> "ReplayEnv":
+        """Build a replay env from in-memory sample dicts (synthetic scenarios)."""
+        return cls(
+            samples=[dict(s) for s in samples],
+            policy=policy if policy is not None else ScriptedPolicy(),
+            allowed_skills=list(allowed_skills)
+            if allowed_skills is not None
+            else list(DEFAULT_SKILL_ORDER),
+        )
+
     def __len__(self) -> int:
         return len(self.samples)
 
@@ -128,3 +145,29 @@ class ReplayEnv:
             return 0.0
         hits = sum(1 for r in labeled if r.decision.skill == r.sample.get("skill"))
         return hits / float(len(labeled))
+
+    def set_policy(self, policy: Any) -> None:
+        """Swap the policy and reset the replay cursor."""
+        self.policy = policy
+        self.reset()
+
+
+def compare_policies(
+    samples: Sequence[Mapping[str, Any]],
+    policies: Mapping[str, Any],
+    *,
+    allowed_skills: Sequence[str] | None = None,
+) -> dict[str, dict[str, Any]]:
+    """Run the same sample sequence through multiple policies; return per-name stats."""
+    out: dict[str, dict[str, Any]] = {}
+    for name, policy in policies.items():
+        env = ReplayEnv.from_samples(
+            samples, policy=policy, allowed_skills=allowed_skills
+        )
+        results = env.run()
+        out[name] = {
+            "agreement_rate": env.agreement_rate(results),
+            "n_steps": len(results),
+            "skills": [r.decision.skill for r in results],
+        }
+    return out
