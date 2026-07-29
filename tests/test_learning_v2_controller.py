@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from playmind.learning import OnlinePolicy, owned_state_key
 from playmind.learning_v2_controller import LearningV2Config, LearningV2Controller
+from playmind.policies.base import PolicyDecision
 
 
 def _alive_obs(**over):
@@ -22,6 +23,8 @@ def _alive_obs(**over):
         "ui_hits": [],
         "stuck_hint": "none",
         "progress_stage": "explore",
+        "controls_responsive": True,
+        "ui_stable": True,
     }
     base.update(over)
     return base
@@ -103,3 +106,78 @@ def test_v2_applies_skill_timeout_overrides() -> None:
     if ctl.runtime.active.name == "explore":
         assert ctl.runtime.active.timeout_s == 1.5
         assert ctl.runtime.active.retry_limit == 1
+
+
+def test_active_skill_persists_without_polling_oscillating_policy() -> None:
+    class OscillatingPolicy:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def choose_skill(self, context, allowed_skills):
+            self.calls += 1
+            skill = "explore" if self.calls % 2 else "acquire_target"
+            return PolicyDecision(
+                skill=skill,
+                confidence=0.9,
+                reason="oscillating test policy",
+                model_version="test",
+                allowed_skills=list(allowed_skills),
+            )
+
+    ctl = LearningV2Controller(
+        LearningV2Config(
+            enabled=True,
+            policy_mode="hybrid",
+            minimum_commitment_seconds=10.0,
+        )
+    )
+    policy = OscillatingPolicy()
+    ctl.hybrid = policy  # type: ignore[assignment]
+
+    ctl.choose_action(_alive_obs(hostiles_near=False), tick=1)
+    first_skill = ctl.runtime.active_name
+    ctl.choose_action(_alive_obs(hostiles_near=False), tick=2)
+
+    assert first_skill == "explore"
+    assert ctl.runtime.active_name == first_skill
+    assert policy.calls == 1
+
+
+def test_death_opens_recovery_not_resurrected_gameplay(tmp_path) -> None:
+    ctl = LearningV2Controller(
+        LearningV2Config(
+            enabled=True,
+            policy_mode="scripted",
+            controllable_frames=1,
+        )
+    )
+    ctl.ensure_episode(tmp_path)
+    alive = _alive_obs()
+    ctl.note_transition(alive, "wait", "wait", alive, dt=0.1)
+    assert ctl.episode_mgr is not None
+    assert ctl.episode_mgr.current is not None
+    assert ctl.episode_mgr.current.episode_kind == "gameplay"
+
+    dead = _alive_obs(
+        is_dead=True,
+        life_phase="dead_dialog",
+        vision_player_hp=0.0,
+        controls_responsive=False,
+    )
+    ctl.note_transition(alive, "wait", "wait", dead, dt=0.1)
+
+    assert ctl.episode_mgr.current is not None
+    assert ctl.episode_mgr.current.episode_kind == "recovery"
+    assert ctl.episode_mgr.current.start_reason == "death_recovery"
+
+
+def test_commitment_stats_appear_in_status_patch() -> None:
+    ctl = LearningV2Controller(
+        LearningV2Config(enabled=True, policy_mode="scripted")
+    )
+    ctl.choose_action(_alive_obs(hostiles_near=False), tick=1)
+
+    status = ctl.status_patch()
+    assert status["commitment_stats"]["active_skill"] == ctl.runtime.active_name
+    assert status["commitment_stats"]["commitments_started"] == 1
+    assert status["commitment"] == status["commitment_stats"]

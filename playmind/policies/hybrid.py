@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+import warnings
 from typing import Any, Mapping, Sequence
 
 from playmind.policies.base import PolicyDecision
@@ -31,13 +33,24 @@ class BehaviorCloningPolicy:
 
     model_version: str = "bc-stub"
 
-    def __init__(self, *, strict: bool = False, policy: Any | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        strict: bool = False,
+        policy: Any | None = None,
+        load_error: str | None = None,
+    ) -> None:
         self.strict = strict
         self._policy = policy
+        self.load_error = load_error
+        self._recurrent = False
         if policy is not None:
             self.model_version = str(
                 getattr(policy, "model_version", None) or "bc-loaded"
             )
+            from playmind.models.recurrent_policy import RecurrentSkillPolicyV2
+
+            self._recurrent = isinstance(policy, RecurrentSkillPolicyV2)
 
     @classmethod
     def from_checkpoint(
@@ -46,18 +59,45 @@ class BehaviorCloningPolicy:
         *,
         strict: bool = False,
     ) -> "BehaviorCloningPolicy":
-        """Load ``SkillPolicyV2`` from ``path`` when the file exists."""
+        """Load a recurrent or legacy MLP policy based on checkpoint metadata."""
         from pathlib import Path
 
+        from playmind.models.recurrent_policy import RecurrentSkillPolicyV2
         from playmind.models.policy_v2 import SkillPolicyV2
 
         p = Path(path)
         meta = p if p.suffix == ".json" else p.with_suffix(".json")
-        if not meta.exists() and not p.exists():
-            bc = cls(strict=strict)
+        if not meta.exists():
+            message = f"Behavior-cloning checkpoint metadata not found: {meta}"
+            if strict:
+                raise FileNotFoundError(message)
+            bc = cls(strict=False, load_error=message)
             bc.model_version = f"bc:missing:{p.name}"
             return bc
-        loaded = SkillPolicyV2.load(p if p.exists() else meta)
+        try:
+            with meta.open("r", encoding="utf-8") as handle:
+                metadata = json.load(handle)
+            model_type = str(
+                metadata.get("model_type")
+                or (metadata.get("config") or {}).get("model_type")
+                or ""
+            )
+            if model_type == "recurrent_skill_policy":
+                loaded = RecurrentSkillPolicyV2.load(meta)
+            elif model_type in {"", "structured_mlp_legacy", "skill_policy_v2"}:
+                loaded = SkillPolicyV2.load(meta)
+            else:
+                raise ValueError(
+                    f"unsupported checkpoint model_type={model_type!r}"
+                )
+        except Exception as exc:  # noqa: BLE001 - incompatible files must fail safe
+            message = f"Incompatible behavior-cloning checkpoint {meta}: {exc}"
+            if strict:
+                raise ValueError(message) from exc
+            warnings.warn(f"{message}; using scripted fallback", RuntimeWarning)
+            bc = cls(strict=False, load_error=message)
+            bc.model_version = f"bc:incompatible:{p.name}"
+            return bc
         return cls(strict=strict, policy=loaded)
 
     def choose_skill(
@@ -66,6 +106,10 @@ class BehaviorCloningPolicy:
         allowed_skills: Sequence[str],
     ) -> PolicyDecision:
         if self._policy is not None:
+            if self._recurrent:
+                # Live inference is deliberately stateless. The complete
+                # rolling sequence is supplied each decision.
+                self._policy.reset_state()
             decision = self._policy.choose_skill(context, allowed_skills)
             if isinstance(decision, PolicyDecision):
                 return decision
@@ -90,7 +134,7 @@ class BehaviorCloningPolicy:
         return PolicyDecision(
             skill=skill,
             confidence=0.0,
-            reason="BC stub — no checkpoint loaded",
+            reason=self.load_error or "BC stub — no checkpoint loaded",
             model_version=self.model_version,
             allowed_skills=allowed,
             used_fallback=True,

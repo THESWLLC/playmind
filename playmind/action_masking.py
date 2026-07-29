@@ -150,6 +150,10 @@ def _confirm_modal(obs: Mapping[str, Any]) -> bool:
     return bool(obs.get("confirm_pending")) or _phase(obs) == "confirm"
 
 
+def _modal_menu(obs: Mapping[str, Any]) -> bool:
+    return bool(obs.get("modal_menu") or obs.get("blocking_modal"))
+
+
 def _is_deathish_action(action: str) -> bool:
     low = (action or "").strip().lower()
     if low == "release_spirit":
@@ -272,7 +276,7 @@ def validate_action(obs: Mapping[str, Any], action: str) -> tuple[bool, str]:
             return False, "release_while_ghost"
 
     # Esc opens Options mid-fight — reject unless modal already open.
-    if alive and low in {"key:esc", "key:escape"} and not obs.get("modal_menu"):
+    if alive and low in {"key:esc", "key:escape"} and not _modal_menu(obs):
         return False, "esc_without_modal"
 
     return True, "ok"
@@ -304,7 +308,7 @@ def mask_skills(
     alive = _alive(obs)
     ghost = _is_ghost(obs)
     dead_side = _is_dead_side(obs)
-    modal = bool(obs.get("modal_menu"))
+    modal = _modal_menu(obs)
     has_target = bool(obs.get("has_target"))
     out: list[str] = []
     for name in skill_names:
@@ -365,7 +369,11 @@ def mask_skills(
             if hp >= 0.45:
                 continue
         if n == "unstuck":
-            if not (obs.get("stuck_hint") or int(obs.get("stagnant") or 0) >= 4):
+            stuck_hint = str(obs.get("stuck_hint") or "").strip().lower()
+            if not (
+                stuck_hint not in {"", "none"}
+                or int(obs.get("stagnant") or 0) >= 4
+            ):
                 continue
         if modal and n not in {"clear_modal", "wait"}:
             continue
