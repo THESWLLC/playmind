@@ -13,7 +13,12 @@ from typing import Any, Mapping
 
 from playmind.rewards_v2 import DEFAULT_REWARDS
 
-POLICY_MODES = frozenset({"scripted", "hybrid", "legacy_q"})
+POLICY_MODES = frozenset({"scripted", "hybrid", "legacy_q", "behavior_clone"})
+_POLICY_MODE_ALIASES = {
+    "bc": "behavior_clone",
+    "behavior-clone": "behavior_clone",
+    "behaviour_clone": "behavior_clone",
+}
 DEVICES = frozenset({"cpu", "cuda", "mps", "auto"})
 
 # Defaults mirror skill class timeouts in playmind/skills/*.
@@ -315,9 +320,12 @@ class LearningV2Settings:
             except (TypeError, ValueError):
                 seed = 0
 
+        mode = str(raw.get("policy_mode") or "hybrid").strip().lower()
+        mode = _POLICY_MODE_ALIASES.get(mode, mode)
+
         settings = cls(
             enabled=bool(raw.get("enabled", False)),
-            policy_mode=str(raw.get("policy_mode") or "hybrid").strip().lower(),
+            policy_mode=mode,
             legacy_q_fallback=bool(raw.get("legacy_q_fallback", False)),
             history_length=int(raw.get("history_length") or 16),
             bc_checkpoint=ckpt,

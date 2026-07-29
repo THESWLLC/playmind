@@ -34,25 +34,32 @@ class LearningV2Config:
     bc_checkpoint: str | None = None
     use_rewards_v2: bool = True
     track_episodes: bool = True
+    settings: Any | None = None  # LearningV2Settings when loaded from owned config
 
     @classmethod
     def from_owned_dict(cls, owned: dict[str, Any]) -> LearningV2Config:
+        from playmind.config_v2 import LearningV2Settings
+
+        settings = LearningV2Settings.load_from_owned_config(owned)
+        if settings.enabled:
+            settings.validate()
+        # GUI alias already normalized in LearningV2Settings; keep model_path fallback
         raw = owned.get("learning_v2") or {}
         if not isinstance(raw, dict):
             raw = {}
-        mode = str(raw.get("policy_mode") or "hybrid")
-        # GUI / docs alias
-        if mode in {"behavior_clone", "bc", "behavior-clone"}:
-            mode = "behavior_clone"
+        ckpt = settings.bc_checkpoint or raw.get("model_path")
+        if ckpt is not None:
+            ckpt = str(ckpt).strip() or None
         return cls(
-            enabled=bool(raw.get("enabled", False)),
-            policy_mode=mode,
-            legacy_q_fallback=bool(raw.get("legacy_q_fallback", False)),
-            history_length=int(raw.get("history_length") or 16),
-            confidence_threshold=float(raw.get("confidence_threshold") or 0.45),
-            bc_checkpoint=raw.get("bc_checkpoint") or raw.get("model_path"),
-            use_rewards_v2=bool(raw.get("use_rewards_v2", True)),
-            track_episodes=bool(raw.get("track_episodes", True)),
+            enabled=bool(settings.enabled),
+            policy_mode=str(settings.policy_mode),
+            legacy_q_fallback=bool(settings.legacy_q_fallback),
+            history_length=int(settings.history_length),
+            confidence_threshold=float(settings.confidence_threshold),
+            bc_checkpoint=ckpt,
+            use_rewards_v2=bool(settings.use_rewards_v2),
+            track_episodes=bool(settings.track_episodes),
+            settings=settings,
         )
 
 
@@ -82,12 +89,12 @@ class LearningV2Controller:
         legacy = None
         if self.cfg.legacy_q_fallback or self.cfg.policy_mode == "legacy_q":
             legacy = LegacyQPolicy(online_policy)
-        bc = BehaviorCloningPolicy(strict=False)
         if self.cfg.bc_checkpoint:
-            # Checkpoint path is stored for GUI/status; stub BC until a real loader is wired.
-            from pathlib import Path as _Path
-
-            bc.model_version = f"bc:{_Path(self.cfg.bc_checkpoint).name}"
+            bc = BehaviorCloningPolicy.from_checkpoint(
+                self.cfg.bc_checkpoint, strict=False
+            )
+        else:
+            bc = BehaviorCloningPolicy(strict=False)
 
         if self.cfg.policy_mode == "scripted":
             self.hybrid = None
@@ -99,8 +106,8 @@ class LearningV2Controller:
                 confidence_threshold=self.cfg.confidence_threshold,
                 use_legacy_q_fallback=True,
             )
-        else:
-            # hybrid / behavior_clone: BC → scripted; optional legacy last
+        elif self.cfg.policy_mode == "behavior_clone":
+            # Prefer BC; still allow scripted emergency fallback via HybridPolicy.
             self.hybrid = HybridPolicy(
                 primary=bc,
                 scripted=self.scripted,
@@ -108,6 +115,36 @@ class LearningV2Controller:
                 confidence_threshold=self.cfg.confidence_threshold,
                 use_legacy_q_fallback=self.cfg.legacy_q_fallback,
             )
+        else:
+            # hybrid: BC → scripted; optional legacy last
+            self.hybrid = HybridPolicy(
+                primary=bc,
+                scripted=self.scripted,
+                legacy_q=legacy,
+                confidence_threshold=self.cfg.confidence_threshold,
+                use_legacy_q_fallback=self.cfg.legacy_q_fallback,
+            )
+
+    def _apply_skill_limits(self, skill: Any) -> None:
+        """Apply config skill_timeouts / retry_limits onto a fresh skill instance."""
+        settings = self.cfg.settings
+        if settings is None or skill is None:
+            return
+        name = getattr(skill, "name", None)
+        if not name:
+            return
+        timeouts = getattr(settings, "skill_timeouts", None) or {}
+        retries = getattr(settings, "skill_retry_limits", None) or {}
+        if name in timeouts:
+            try:
+                skill.timeout_s = float(timeouts[name])
+            except (TypeError, ValueError):
+                pass
+        if name in retries:
+            try:
+                skill.retry_limit = int(retries[name])
+            except (TypeError, ValueError):
+                pass
 
     def ensure_episode(self, data_dir: Any, model_version: str = "learning-v2") -> None:
         if not self.cfg.track_episodes:
@@ -177,11 +214,13 @@ class LearningV2Controller:
 
         if self.runtime.is_idle() or self.runtime.active_name != skill_name:
             try:
-                self.runtime.start(skill_name, skill_ctx)
+                started = self.runtime.start(skill_name, skill_ctx)
+                self._apply_skill_limits(started)
                 if self.episode_mgr is not None:
                     self.episode_mgr.note_skill_attempt()
             except KeyError:
-                self.runtime.start("wait", skill_ctx)
+                started = self.runtime.start("wait", skill_ctx)
+                self._apply_skill_limits(started)
                 skill_name = "wait"
 
         result = self.runtime.step(skill_ctx)
@@ -220,7 +259,10 @@ class LearningV2Controller:
         """Update history, events, rewards, episodes. Returns reward to log."""
         events = detect_events(prev, executed, nxt)
         if self.cfg.use_rewards_v2:
-            breakdown = reward_from_events(events, dt=dt)
+            reward_values = None
+            if self.cfg.settings is not None:
+                reward_values = getattr(self.cfg.settings, "rewards", None)
+            breakdown = reward_from_events(events, dt=dt, values=reward_values)
             reward = float(breakdown.total)
             self.last_reward_breakdown = breakdown.to_dict()
         else:
