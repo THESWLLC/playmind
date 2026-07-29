@@ -1,6 +1,7 @@
 {
   "i_own_this_game": false,
   "enable_keyboard": false,
+  "mode": "shadow",
   "game_name": "MyOwnedGame",
   "keymap_path": "config/keymap.example.json",
   "logout_action": "logout",
@@ -19,6 +20,29 @@
     "break_minutes_min": 10,
     "break_minutes_max": 40,
     "max_wall_hours": 14
+  },
+  "planner_v2": {
+    "enabled": true,
+    "provider": "ollama",
+    "host": "http://127.0.0.1:11434",
+    "production_model": "llama3.2",
+    "candidate_model": null,
+    "maximum_plan_skills": 5,
+    "minimum_confidence": 0.55,
+    "periodic_replan_seconds": 10,
+    "timeout_seconds": 12,
+    "fallback": "heuristic"
+  },
+  "demonstration": {
+    "enabled": true,
+    "capture_physical_input": true,
+    "save_frames": true,
+    "record_generated_input_separately": true
+  },
+  "training": {
+    "default_preset": "rtx_4070_ti_3b_qlora",
+    "base_model": null,
+    "output_root": "models/playmind"
   },
   "learning_v2": {
     "enabled": true,

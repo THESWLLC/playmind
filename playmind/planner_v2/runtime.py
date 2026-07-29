@@ -63,22 +63,36 @@ class PlannerV2Runtime:
         section = full.get("planner_v2")
         self.config = dict(section) if isinstance(section, Mapping) else full
         self.mode = PlannerMode.parse(self.config.get("mode", "shadow"))
-        self.model = str(self.config.get("model") or "llama3.2")
+        self.model = str(
+            self.config.get("model")
+            or self.config.get("production_model")
+            or "llama3.2"
+        )
         self.host = str(
             self.config.get("host") or "http://127.0.0.1:11434"
         ).rstrip("/")
         self.timeout = float(
-            self.config.get("timeout", self.config.get("timeout_s", 60.0))
+            self.config.get(
+                "timeout",
+                self.config.get(
+                    "timeout_s",
+                    self.config.get("timeout_seconds", 60.0),
+                ),
+            )
         )
         self.periodic_interval = max(
             1.0,
             float(
                 self.config.get(
                     "periodic_interval",
-                    self.config.get("periodic_interval_seconds", 30.0),
+                    self.config.get(
+                        "periodic_interval_seconds",
+                        self.config.get("periodic_replan_seconds", 30.0),
+                    ),
                 )
             ),
         )
+        self.minimum_confidence = float(self.config.get("minimum_confidence", 0.0))
         self.health_critical_threshold = float(
             self.config.get("health_critical_threshold", 0.15)
         )
@@ -100,7 +114,12 @@ class PlannerV2Runtime:
         self.planner = planner
         self.execute_skill_callback = execute_skill
         self.validator = validator or PlanValidator(
-            max_plan_length=int(self.config.get("max_plan_length", 5))
+            max_plan_length=int(
+                self.config.get(
+                    "max_plan_length",
+                    self.config.get("maximum_plan_skills", 5),
+                )
+            )
         )
         self.clock = clock
         self.executor = executor or PlanExecutor(clock=clock)
@@ -115,6 +134,7 @@ class PlannerV2Runtime:
         self.last_plan_source = ""
         self.last_trigger: str | None = None
         self.last_dispatched_skill: str | None = None
+        self.last_latency_seconds: float | None = None
         self._last_dispatched_index: int | None = None
         self._last_planner_call: float | None = float(self.clock())
         self._last_goal: str | None = None
@@ -350,6 +370,7 @@ class PlannerV2Runtime:
         self.last_trigger = _event_name(trigger)
         self._last_planner_call = float(self.clock())
         source = "llm"
+        started_at = float(self.clock())
         try:
             raw = self._invoke_planner(state)
             validation = self.validator.validate_or_parse(raw, available_skills)
@@ -366,7 +387,21 @@ class PlannerV2Runtime:
                 source = "heuristic_fallback"
             else:
                 plan = validation.plan
-                self.last_error = ""
+                if float(plan.confidence) < self.minimum_confidence:
+                    reason = (
+                        f"plan confidence {plan.confidence:.3f} is below "
+                        f"{self.minimum_confidence:.3f}"
+                    )
+                    self.last_error = reason
+                    plan = self._fallback_plan(
+                        obs,
+                        goal=goal,
+                        allowed_skills=available_skills,
+                        reason=reason,
+                    )
+                    source = "heuristic_fallback"
+                else:
+                    self.last_error = ""
         except (
             urllib.error.URLError,
             TimeoutError,
@@ -382,6 +417,8 @@ class PlannerV2Runtime:
                 reason=f"{type(exc).__name__}: {exc}",
             )
             source = "heuristic_fallback"
+        finally:
+            self.last_latency_seconds = max(0.0, float(self.clock()) - started_at)
 
         fallback_validation = self.validator.validate(plan, available_skills)
         if not fallback_validation.ok:
@@ -483,6 +520,7 @@ class PlannerV2Runtime:
             and not self.awaiting_approval,
             "executor": self.executor.snapshot(),
             "last_dispatched_skill": self.last_dispatched_skill,
+            "latency_seconds": self.last_latency_seconds,
         }
 
 

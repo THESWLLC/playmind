@@ -1,0 +1,6 @@
+# Core owned-game capture and demonstration dependencies.
+# The GUI and API themselves use the Python standard library.
+mss
+Pillow
+pytesseract
+pynput

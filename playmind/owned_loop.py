@@ -52,6 +52,9 @@ from playmind.ui_memory import UIMemory, discover_and_remember, ensure_seeded
 from playmind.soul import feel_soul
 from playmind.life_fsm import LifeFSM
 from playmind.learning_v2_controller import LearningV2Config, LearningV2Controller
+from playmind.planner_v2.modes import PlannerMode
+from playmind.planner_v2.runtime import PlannerV2Runtime
+from playmind.skills import list_skills
 from playmind.vision import (
     detect_death_dialog,
     detect_hostile_nameplate_ocr,
@@ -91,6 +94,9 @@ class OwnedLoopConfig:
     teacher_every: int = 12  # at most every N bad ticks
     # Learning Architecture V2 (skills / hybrid). Overrides raw-Q when enabled in config.
     learning_v2: LearningV2Config | None = None
+    # Planner V2 defaults to a non-actuating shadow mode.
+    mode: str | None = None
+    planner_v2: dict[str, Any] | None = None
 
 
 def load_owned_config(path: Path) -> dict[str, Any]:
@@ -203,6 +209,9 @@ class OwnedGameLoop:
     _process: ProcessMemory | None = None
     _recent: list[tuple[dict[str, Any], str]] = field(default_factory=list)
     _v2: LearningV2Controller | None = None
+    _planner_v2: PlannerV2Runtime | None = None
+    _soft_estop: bool = False
+    _planner_last_outcome_token: int | None = None
 
     def _action_space(self, policy: OnlinePolicy, extra: str | None = None) -> list[str]:
         acts: list[str] = list(OWNED_ACTIONS)
@@ -265,6 +274,13 @@ class OwnedGameLoop:
         rois = owned.get("rois", {})
         session_cfg = SessionConfig(**owned.get("session", {}))
         scheduler = SessionScheduler(config=session_cfg)
+        selected_mode = PlannerMode.parse(self.cfg.mode or owned.get("mode") or "shadow")
+        planner_settings = dict(owned.get("planner_v2") or {})
+        if self.cfg.planner_v2 is not None:
+            planner_settings.update(self.cfg.planner_v2)
+        planner_settings["mode"] = selected_mode.value
+        planner_settings["i_own_this_game"] = bool(owned.get("i_own_this_game", False))
+        planner_settings["enable_keyboard"] = bool(owned.get("enable_keyboard", False))
 
         ui_memory = UIMemory(self.cfg.data_dir / "ui_memory.json")
         ensure_seeded(ui_memory)
@@ -278,7 +294,15 @@ class OwnedGameLoop:
         self._recent = []
 
         actuator: Actuator
-        if self.cfg.dry_run or not owned.get("enable_keyboard", False):
+        if (
+            self.cfg.dry_run
+            or not owned.get("enable_keyboard", False)
+            or selected_mode in {
+                PlannerMode.OBSERVE,
+                PlannerMode.SHADOW,
+                PlannerMode.REPLAY,
+            }
+        ):
             actuator = DryRunKeyboardActuator(
                 keymap=keymap, log_path=self.cfg.data_dir / "dryrun.jsonl"
             )
@@ -384,6 +408,25 @@ class OwnedGameLoop:
                 f"rewards_v2={v2_cfg.use_rewards_v2}"
             )
 
+        self._planner_v2 = None
+        if bool(planner_settings.get("enabled", False)):
+            def queue_planner_skill(skill_name: str) -> None:
+                if (
+                    selected_mode is PlannerMode.HYBRID
+                    and self._v2 is not None
+                    and self._v2.cfg.enabled
+                ):
+                    self._v2.queue_planner_skill(skill_name)
+
+            self._planner_v2 = PlannerV2Runtime(
+                planner_settings,
+                execute_skill=queue_planner_skill,
+            )
+            print(
+                f"Planner V2 enabled mode={selected_mode.value} "
+                f"model={self._planner_v2.model}"
+            )
+
         self._goal = parse_directive(self.directive)
         print(f"Directive goal: {self._goal.summary()} ({self._goal.raw!r})")
         if self.cfg.use_teacher and self.cfg.learn:
@@ -433,6 +476,11 @@ class OwnedGameLoop:
                     print(f"capture failed: {exc}")
                     time.sleep(1.0)
                     continue
+
+                if "unfocused" in str(getattr(cap, "note", "")).lower():
+                    self._soft_estop = True
+                    if self._planner_v2 is not None:
+                        self._planner_v2.set_emergency_stop(True)
 
                 # Keep previous frame for motion / reward.
                 snap_path = self.cfg.data_dir / "prev.png"
@@ -518,8 +566,43 @@ class OwnedGameLoop:
                 if screen_brain is not None:
                     screen_brain.ability_summary = obs["ability_summary"]
                 self._tick = ticks
+                if self._planner_v2 is not None and not self._soft_estop:
+                    available_skills = list_skills() or ["wait"]
+                    planner_event = None
+                    runtime_result = (
+                        getattr(self._v2, "_last_runtime_result", None)
+                        if self._v2 is not None
+                        else None
+                    )
+                    outcome_status = str(getattr(runtime_result, "status", "")).lower()
+                    outcome_token = id(runtime_result) if runtime_result is not None else None
+                    if (
+                        outcome_token is not None
+                        and outcome_token != self._planner_last_outcome_token
+                        and outcome_status in {"success", "failed", "timeout", "cancelled"}
+                    ):
+                        self._planner_v2.note_skill_outcome(
+                            outcome_status,
+                            reason=str(getattr(runtime_result, "reason", "")),
+                        )
+                        self._planner_last_outcome_token = outcome_token
+                        if outcome_status != "success":
+                            planner_event = "skill_fail"
+                    self._planner_v2.step(
+                        obs,
+                        goal=goal.summary(),
+                        available_skills=available_skills,
+                        event=planner_event,
+                        auth_flags={
+                            "i_own_this_game": bool(owned.get("i_own_this_game", False)),
+                            "enable_keyboard": bool(owned.get("enable_keyboard", False)),
+                        },
+                    )
                 action = self._choose_action(policy, planner, obs, frame_path=cap.path)
                 action = self._reject_invalid_action(action, policy, obs)
+                if self._soft_estop:
+                    action = "wait"
+                    self._decision_reason = "soft_e_stop: capture reported unfocused"
                 # Let click_label discover via live OCR on this frame.
                 if hasattr(actuator, "last_frame"):
                     actuator.last_frame = cap.path
@@ -764,10 +847,14 @@ class OwnedGameLoop:
                     "teacher_last": getattr(self._teacher, "last_better", "") if self._teacher else "",
                     "session": scheduler.status(),
                     "mode": mode,
+                    "planner_mode": selected_mode.value,
+                    "soft_estop": self._soft_estop,
                     "frame": str(cap.path),
                 }
                 if self._v2 is not None and self._v2.cfg.enabled:
                     status.update(self._v2.status_patch())
+                if self._planner_v2 is not None:
+                    status["planner_v2"] = self._planner_v2.snapshot()
                 if self.on_status:
                     self.on_status(status)
                 else:

@@ -17,6 +17,7 @@ from playmind.history import TemporalHistory
 from playmind.life_episode import EpisodeLifecycleController, LifecycleState
 from playmind.models.feature_schema import structured_feature_vector_v2
 from playmind.observations import Observation
+from playmind.policies.base import PolicyDecision
 from playmind.policies.hybrid import BehaviorCloningPolicy, HybridPolicy
 from playmind.policies.legacy_q import LegacyQPolicy
 from playmind.policies.scripted import DEFAULT_SKILL_ORDER, ScriptedPolicy
@@ -107,6 +108,12 @@ class LearningV2Controller:
     _skill_outcome_recorded: bool = True
     _next_policy_query_at: float = 0.0
     _shutdown: bool = False
+    _planner_skill: str | None = None
+
+    def queue_planner_skill(self, skill_name: str) -> None:
+        """Queue one validated Planner V2 skill for the next policy boundary."""
+        self._planner_skill = str(skill_name)
+        self._next_policy_query_at = 0.0
 
     def __post_init__(self) -> None:
         self.history = TemporalHistory(maxlen=max(4, int(self.cfg.history_length)))
@@ -369,11 +376,23 @@ class LearningV2Controller:
             query_policy = True
 
         if query_policy:
-            decision, mode = self._choose_policy_skill(
-                ctx_map,
-                allowed,
-                emergency=reconsider.force_interrupt,
-            )
+            planned = self._planner_skill
+            self._planner_skill = None
+            if planned in allowed and not reconsider.force_interrupt:
+                decision = PolicyDecision(
+                    skill=str(planned),
+                    confidence=1.0,
+                    reason="validated Planner V2 queue",
+                    model_version="planner_v2",
+                    allowed_skills=list(allowed),
+                )
+                mode = "planner_v2"
+            else:
+                decision, mode = self._choose_policy_skill(
+                    ctx_map,
+                    allowed,
+                    emergency=reconsider.force_interrupt,
+                )
             final_reconsider = reconsider
             if active is not None and not reconsider.force_interrupt:
                 final_reconsider = self.commitment.should_reconsider(
