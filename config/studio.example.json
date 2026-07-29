@@ -1,0 +1,28 @@
+{
+  "profile": "retail_wow_offline_only",
+  "storage_root": "data/playmind/studio",
+  "projects_root": "data/playmind/studio/projects",
+  "data_root": "data/playmind",
+  "registry_path": "data/playmind/planner/registry.sqlite",
+  "server": {
+    "host": "127.0.0.1",
+    "port": 8787,
+    "open_browser": true
+  },
+  "import": {
+    "mode": "copy",
+    "require_rights_confirmation": true,
+    "ffmpeg_required": true
+  },
+  "safety": {
+    "offline_only": true,
+    "live_capture": false,
+    "live_planning": false,
+    "process_access": false,
+    "generated_input": false
+  },
+  "training": {
+    "default_action": "smoke",
+    "smoke_label": "SMOKE / NO REAL WEIGHTS TRAINED"
+  }
+}
