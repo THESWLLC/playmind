@@ -5,8 +5,11 @@
   "keymap_path": "config/keymap.example.json",
   "logout_action": "logout",
   "capture": {
-    "mode": "monitor",
-    "monitor_index": 1
+    "mode": "window",
+    "window_title": "MyOwnedGame",
+    "client_area": true,
+    "prefer_printwindow": true,
+    "focus_before_capture": true
   },
   "rois": {
     "hp_roi": [40, 40, 240, 70]

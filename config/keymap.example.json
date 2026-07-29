@@ -6,6 +6,8 @@
   "attack": "1",
   "loot": "f",
   "interact": "e",
+  "target_nearest": "tab",
+  "release_spirit": "__click_release__",
   "open_quest_log": "l",
   "logout": "f12",
   "wait": null
