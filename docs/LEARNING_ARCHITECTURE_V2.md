@@ -147,13 +147,19 @@ Replay env evaluates offline without sending keys.
 - [x] `playmind/events.py` + `rewards_v2.py`
 - [x] `playmind/learning_v2_controller.py` + `owned_loop` config gate
 - [x] Tests for new modules
-- [ ] Demo recording / BC / eval / replay / GUI tabs / sensor labeling (follow-on)
+- [x] `playmind/config_v2.py` (validated settings)
+- [x] `playmind/migration.py` + `scripts/migrate_legacy_learning.py`
+- [x] `playmind/diagnostics.py` + `scripts/export_diagnostics.py`
+- [x] Docs: QUICKSTART_V2, DEMONSTRATION_RECORDING, TRAINING, EVALUATION, SENSOR_LABELING, SKILLS, MIGRATION
+- [ ] GUI tabs / richer sensor labeling UI (follow-on)
 
 Enable via `learning_v2.enabled` in `owned_game.json` — see [QUICKSTART_V2.md](./QUICKSTART_V2.md).
 
 ---
 
 ## 8. Config sketch (`learning_v2` section)
+
+Full validated settings: `playmind/config_v2.py` (`LearningV2Settings`).
 
 ```json
 "learning_v2": {
@@ -163,6 +169,7 @@ Enable via `learning_v2.enabled` in `owned_game.json` — see [QUICKSTART_V2.md]
   "history_length": 16,
   "bc_checkpoint": null,
   "confidence_threshold": 0.45,
-  "device": "cpu"
+  "device": "cpu",
+  "seed": 0
 }
 ```

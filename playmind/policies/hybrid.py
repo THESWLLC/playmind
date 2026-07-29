@@ -22,25 +22,68 @@ from playmind.policies.scripted import (
 
 
 class BehaviorCloningPolicy:
-    """Placeholder until Phase 8 training lands.
+    """Wraps a loaded ``SkillPolicyV2`` checkpoint, or stubs until one exists.
 
-    Either raises ``NotImplementedError`` when ``strict=True``, or always
-    returns a low-confidence decision so HybridPolicy falls back to scripted.
+    When ``policy`` is set (trained SkillPolicyV2), decisions come from the
+    model. Otherwise ``strict=True`` raises; ``strict=False`` returns
+    low-confidence so HybridPolicy falls back to scripted.
     """
 
     model_version: str = "bc-stub"
 
-    def __init__(self, *, strict: bool = False) -> None:
+    def __init__(self, *, strict: bool = False, policy: Any | None = None) -> None:
         self.strict = strict
+        self._policy = policy
+        if policy is not None:
+            self.model_version = str(
+                getattr(policy, "model_version", None) or "bc-loaded"
+            )
+
+    @classmethod
+    def from_checkpoint(
+        cls,
+        path: str | Any,
+        *,
+        strict: bool = False,
+    ) -> "BehaviorCloningPolicy":
+        """Load ``SkillPolicyV2`` from ``path`` when the file exists."""
+        from pathlib import Path
+
+        from playmind.models.policy_v2 import SkillPolicyV2
+
+        p = Path(path)
+        meta = p if p.suffix == ".json" else p.with_suffix(".json")
+        if not meta.exists() and not p.exists():
+            bc = cls(strict=strict)
+            bc.model_version = f"bc:missing:{p.name}"
+            return bc
+        loaded = SkillPolicyV2.load(p if p.exists() else meta)
+        return cls(strict=strict, policy=loaded)
 
     def choose_skill(
         self,
         context: Mapping[str, Any],
         allowed_skills: Sequence[str],
     ) -> PolicyDecision:
+        if self._policy is not None:
+            decision = self._policy.choose_skill(context, allowed_skills)
+            if isinstance(decision, PolicyDecision):
+                return decision
+            # Defensive: unexpected return shape
+            allowed = list(dict.fromkeys(str(s) for s in allowed_skills))
+            return PolicyDecision(
+                skill=str(getattr(decision, "skill", "wait")),
+                confidence=float(getattr(decision, "confidence", 0.0)),
+                reason=str(getattr(decision, "reason", "BC policy")),
+                model_version=self.model_version,
+                allowed_skills=allowed,
+                used_fallback=bool(getattr(decision, "used_fallback", False)),
+                temporal_summary=str(context.get("temporal_summary") or ""),
+                debug_scores={"bc_available": 1.0},
+            )
         if self.strict:
             raise NotImplementedError(
-                "BehaviorCloningPolicy requires a trained checkpoint (Phase 8)"
+                "BehaviorCloningPolicy requires a trained checkpoint"
             )
         allowed = list(dict.fromkeys(str(s) for s in allowed_skills))
         skill = allowed[0] if allowed else "wait"

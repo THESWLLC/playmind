@@ -27,28 +27,39 @@ from playmind.skills.runtime import SkillRuntime
 @dataclass
 class LearningV2Config:
     enabled: bool = False
-    policy_mode: str = "hybrid"  # scripted | hybrid | legacy_q
+    policy_mode: str = "hybrid"  # scripted | hybrid | legacy_q | behavior_clone
     legacy_q_fallback: bool = False
     history_length: int = 16
     confidence_threshold: float = 0.45
     bc_checkpoint: str | None = None
     use_rewards_v2: bool = True
     track_episodes: bool = True
+    settings: Any | None = None  # LearningV2Settings when loaded from owned config
 
     @classmethod
     def from_owned_dict(cls, owned: dict[str, Any]) -> LearningV2Config:
+        from playmind.config_v2 import LearningV2Settings
+
+        settings = LearningV2Settings.load_from_owned_config(owned)
+        if settings.enabled:
+            settings.validate()
+        # GUI alias already normalized in LearningV2Settings; keep model_path fallback
         raw = owned.get("learning_v2") or {}
         if not isinstance(raw, dict):
             raw = {}
+        ckpt = settings.bc_checkpoint or raw.get("model_path")
+        if ckpt is not None:
+            ckpt = str(ckpt).strip() or None
         return cls(
-            enabled=bool(raw.get("enabled", False)),
-            policy_mode=str(raw.get("policy_mode") or "hybrid"),
-            legacy_q_fallback=bool(raw.get("legacy_q_fallback", False)),
-            history_length=int(raw.get("history_length") or 16),
-            confidence_threshold=float(raw.get("confidence_threshold") or 0.45),
-            bc_checkpoint=raw.get("bc_checkpoint"),
-            use_rewards_v2=bool(raw.get("use_rewards_v2", True)),
-            track_episodes=bool(raw.get("track_episodes", True)),
+            enabled=bool(settings.enabled),
+            policy_mode=str(settings.policy_mode),
+            legacy_q_fallback=bool(settings.legacy_q_fallback),
+            history_length=int(settings.history_length),
+            confidence_threshold=float(settings.confidence_threshold),
+            bc_checkpoint=ckpt,
+            use_rewards_v2=bool(settings.use_rewards_v2),
+            track_episodes=bool(settings.track_episodes),
+            settings=settings,
         )
 
 
@@ -63,6 +74,10 @@ class LearningV2Controller:
     last_decision_reason: str = ""
     last_skill: str | None = None
     last_policy_mode: str = ""
+    last_confidence: float = 0.0
+    last_model_version: str | None = None
+    last_allowed_skills: list[str] = field(default_factory=list)
+    last_masked_skills: list[str] = field(default_factory=list)
     last_reward_breakdown: dict[str, Any] = field(default_factory=dict)
     _legacy_policy: Any = None
 
@@ -74,7 +89,13 @@ class LearningV2Controller:
         legacy = None
         if self.cfg.legacy_q_fallback or self.cfg.policy_mode == "legacy_q":
             legacy = LegacyQPolicy(online_policy)
-        bc = BehaviorCloningPolicy(strict=False)
+        if self.cfg.bc_checkpoint:
+            bc = BehaviorCloningPolicy.from_checkpoint(
+                self.cfg.bc_checkpoint, strict=False
+            )
+        else:
+            bc = BehaviorCloningPolicy(strict=False)
+
         if self.cfg.policy_mode == "scripted":
             self.hybrid = None
         elif self.cfg.policy_mode == "legacy_q":
@@ -85,8 +106,8 @@ class LearningV2Controller:
                 confidence_threshold=self.cfg.confidence_threshold,
                 use_legacy_q_fallback=True,
             )
-        else:
-            # hybrid: BC stub → scripted; optional legacy last
+        elif self.cfg.policy_mode == "behavior_clone":
+            # Prefer BC; still allow scripted emergency fallback via HybridPolicy.
             self.hybrid = HybridPolicy(
                 primary=bc,
                 scripted=self.scripted,
@@ -94,6 +115,36 @@ class LearningV2Controller:
                 confidence_threshold=self.cfg.confidence_threshold,
                 use_legacy_q_fallback=self.cfg.legacy_q_fallback,
             )
+        else:
+            # hybrid: BC → scripted; optional legacy last
+            self.hybrid = HybridPolicy(
+                primary=bc,
+                scripted=self.scripted,
+                legacy_q=legacy,
+                confidence_threshold=self.cfg.confidence_threshold,
+                use_legacy_q_fallback=self.cfg.legacy_q_fallback,
+            )
+
+    def _apply_skill_limits(self, skill: Any) -> None:
+        """Apply config skill_timeouts / retry_limits onto a fresh skill instance."""
+        settings = self.cfg.settings
+        if settings is None or skill is None:
+            return
+        name = getattr(skill, "name", None)
+        if not name:
+            return
+        timeouts = getattr(settings, "skill_timeouts", None) or {}
+        retries = getattr(settings, "skill_retry_limits", None) or {}
+        if name in timeouts:
+            try:
+                skill.timeout_s = float(timeouts[name])
+            except (TypeError, ValueError):
+                pass
+        if name in retries:
+            try:
+                skill.retry_limit = int(retries[name])
+            except (TypeError, ValueError):
+                pass
 
     def ensure_episode(self, data_dir: Any, model_version: str = "learning-v2") -> None:
         if not self.cfg.track_episodes:
@@ -126,9 +177,12 @@ class LearningV2Controller:
             "tick": tick,
         }
 
-        allowed = mask_skills(obs, list_skills() or list(DEFAULT_SKILL_ORDER))
+        all_skills = list_skills() or list(DEFAULT_SKILL_ORDER)
+        allowed = mask_skills(obs, all_skills)
         if not allowed:
             allowed = ["wait"]
+        allowed_set = set(allowed)
+        masked = [s for s in all_skills if s not in allowed_set]
 
         if self.cfg.policy_mode == "scripted" or self.hybrid is None:
             decision = self.scripted.choose_skill(ctx_map, allowed)
@@ -140,6 +194,10 @@ class LearningV2Controller:
         skill_name = decision.skill
         self.last_skill = skill_name
         self.last_policy_mode = mode
+        self.last_confidence = float(decision.confidence)
+        self.last_model_version = decision.model_version
+        self.last_allowed_skills = list(allowed)
+        self.last_masked_skills = list(masked)
         self.last_decision_reason = (
             f"v2:{mode} skill={skill_name} conf={decision.confidence:.2f} "
             f"fallback={decision.used_fallback} | {decision.reason}"
@@ -156,11 +214,13 @@ class LearningV2Controller:
 
         if self.runtime.is_idle() or self.runtime.active_name != skill_name:
             try:
-                self.runtime.start(skill_name, skill_ctx)
+                started = self.runtime.start(skill_name, skill_ctx)
+                self._apply_skill_limits(started)
                 if self.episode_mgr is not None:
                     self.episode_mgr.note_skill_attempt()
             except KeyError:
-                self.runtime.start("wait", skill_ctx)
+                started = self.runtime.start("wait", skill_ctx)
+                self._apply_skill_limits(started)
                 skill_name = "wait"
 
         result = self.runtime.step(skill_ctx)
@@ -199,7 +259,10 @@ class LearningV2Controller:
         """Update history, events, rewards, episodes. Returns reward to log."""
         events = detect_events(prev, executed, nxt)
         if self.cfg.use_rewards_v2:
-            breakdown = reward_from_events(events, dt=dt)
+            reward_values = None
+            if self.cfg.settings is not None:
+                reward_values = getattr(self.cfg.settings, "rewards", None)
+            breakdown = reward_from_events(events, dt=dt, values=reward_values)
             reward = float(breakdown.total)
             self.last_reward_breakdown = breakdown.to_dict()
         else:
@@ -248,19 +311,49 @@ class LearningV2Controller:
 
         return reward
 
+    def _sensor_confidence_summary(self) -> dict[str, Any]:
+        """Compact confidence map from the latest history observation."""
+        if not self.history.observations:
+            return {}
+        obs = self.history.observations[-1]
+        out: dict[str, Any] = {}
+        for name in (
+            "player_hp",
+            "target_hp",
+            "has_target",
+            "in_combat",
+            "motion",
+            "hostile_count",
+        ):
+            try:
+                sv = obs.sensor(name)
+            except KeyError:
+                continue
+            out[name] = sv.confidence
+        if obs.sensor_warnings:
+            out["warnings"] = list(obs.sensor_warnings)[:8]
+        return out
+
     def status_patch(self) -> dict[str, Any]:
         summary = self.history.summarize()
+        snap = self.runtime.snapshot()
+        ep = self.episode_mgr.current if self.episode_mgr else None
         return {
             "learning_v2": True,
             "policy_mode": self.last_policy_mode or self.cfg.policy_mode,
+            "model_path": self.cfg.bc_checkpoint,
+            "model_version": self.last_model_version,
+            "confidence": self.last_confidence,
             "active_skill": self.runtime.active_name,
-            "skill_snapshot": self.runtime.snapshot(),
+            "skill_status": snap.get("last_status"),
+            "skill_snapshot": snap,
+            "skill_elapsed": getattr(summary, "current_skill_duration", None),
+            "allowed_skills": list(self.last_allowed_skills),
+            "masked_skills": list(self.last_masked_skills),
             "decision": self.last_decision_reason,
             "reward_v2": self.last_reward_breakdown,
-            "episode_id": (
-                self.episode_mgr.current.episode_id
-                if self.episode_mgr and self.episode_mgr.current
-                else None
-            ),
+            "episode_id": ep.episode_id if ep else None,
+            "episode_reward": float(ep.total_reward) if ep else None,
+            "sensor_confidence": self._sensor_confidence_summary(),
             "temporal": summary.__dict__ if hasattr(summary, "__dict__") else str(summary),
         }
